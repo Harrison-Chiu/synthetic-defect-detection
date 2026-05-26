@@ -33,13 +33,24 @@ PART = "pan_head"
 ELEVATIONS = [-60, -30, -10, 10, 30, 60]   # 6 個，含仰視
 AZIMUTHS   = [0, 120, 240]                  # 3 個
 HDRIS      = ["university_workshop_4k.exr", "crossfit_gym_4k.exr"]  # 2 個
-DEFECT_STATES = ["normal", "bend_light", "bend_heavy", "displace_light", "displace_heavy"]
+# Stage 3：新增 remesh_light / remesh_heavy 取代 Bevel（Bevel 視覺幾乎無效）
+DEFECT_STATES = [
+    "normal",
+    "bend_light", "bend_heavy",
+    "displace_light", "displace_heavy",
+    "remesh_light", "remesh_heavy",
+]
 
 # Defect 參數範圍（內部 random 由 seed 控制）
 BEND_LIGHT_RANGE     = (10, 20)         # degrees（從 5–15 提高，5° 在 256 解析度幾乎看不到）
 BEND_HEAVY_RANGE     = (25, 45)
-DISPLACE_LIGHT_RANGE = (0.05, 0.15)    # OBJECT LOCAL units, NOT world meters
-DISPLACE_HEAVY_RANGE = (0.20, 0.40)
+# Stage 3：displace 強度翻倍（Stage 2 light=0.05–0.15、heavy=0.20–0.40 視覺效果過弱）
+DISPLACE_LIGHT_RANGE = (0.15, 0.30)    # OBJECT LOCAL units, NOT world meters
+DISPLACE_HEAVY_RANGE = (0.40, 0.80)
+# Remesh Sharp：voxel 化造成「塊狀破損」感。octree_depth 越小越破碎
+REMESH_LIGHT_OCTREE_RANGE = (7, 8)     # 表面變粗糙、輕微多邊形化
+REMESH_HEAVY_OCTREE_RANGE = (5, 6)     # 明顯塊狀破損
+REMESH_SCALE              = 0.99       # 0.99 接近原大小，1.0 會跟 boundary 同步
 # 重要：Displace strength 是物件 local space 單位，不是世界 meter
 # 我們零件 scale=0.001，local 1 unit = 1mm 世界，所以這裡 0.1 ≈ 0.1mm 世界 displacement
 # pan_head 原始 3614 頂點已足夠 displace，不需 Subsurf
@@ -147,6 +158,17 @@ def apply_defect(obj, defect_state, rng):
         m.mid_level = 0.5
         m.direction = "NORMAL"
         return {"strength": round(strength, 6), "noise_scale": round(noise_scale, 3)}
+
+    if defect_state.startswith("remesh"):
+        rng_range = (REMESH_LIGHT_OCTREE_RANGE if defect_state == "remesh_light"
+                     else REMESH_HEAVY_OCTREE_RANGE)
+        octree_depth = rng.randint(rng_range[0], rng_range[1])  # inclusive both ends
+        m = obj.modifiers.new("DefectRemesh", "REMESH")
+        m.mode         = "SHARP"
+        m.octree_depth = octree_depth
+        m.scale        = REMESH_SCALE
+        # threshold/sharpness 用預設即可（threshold=1.0, sharpness=1.0）
+        return {"octree_depth": int(octree_depth), "scale": REMESH_SCALE}
 
     raise ValueError(f"Unknown defect_state: {defect_state}")
 

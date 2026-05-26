@@ -6,6 +6,10 @@ labels/metadata.csv
 # 下載清單見 README / PLAN.md
 assets/hdri/*.exr
 
+# ─── AmbientCG 背景候選（38MB，可從 download_ambientcg.py 重生）───
+# 已選用的 5 張在 assets/backgrounds_real/ 已追蹤
+assets/backgrounds_candidates/
+
 # ─── Python ───
 __pycache__/
 *.pyc

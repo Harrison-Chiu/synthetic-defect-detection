@@ -74,6 +74,8 @@ NSYSU MEME552 深度學習理論與應用 — 期末專題。
 ```
 docs/
 ├── PLAN.md                ← 主計畫
+├── stage3_plan.md         ← Stage 3 兩頭架構 + 資料集擴充計畫（當前）
+├── stage2_baseline_results.md ← Stage 2 結果與失敗分析
 ├── stage2_plan.md         ← Stage 2 詳細技術設計
 ├── stage1_mvp_report.md   ← Stage 1 完成報告
 ├── operations_stage1.md   ← Stage 1 操作指令（封存）
@@ -104,12 +106,22 @@ docs/
 - [x] `scripts/eval_stage2.py` + `docs/figures/stage2/`：5 張報告用圖 + summary
 - [x] 完整結果 + 失敗分析 + 下一步選項見 [docs/stage2_baseline_results.md](docs/stage2_baseline_results.md)
 
-### Stage 2 — 下一步（討論中）
-**核心觀察**：confusion matrix 顯示「物件 vs 背景」幾乎完美（99.4% / 99.0%），失敗純粹在「normal vs defect」一刀（99.2% defect pixel 被預測成 normal）。
-**主要候選方向**（待跟組員討論）：
-1. **Two-head 架構** — 共用 encoder，part/bg binary head + defect head 解耦（Harrison 提議，confusion matrix 背書）
-2. 同 single-head 換 loss：Dice / Focal 對付 minority class，LR 降到 1e-3 + Adam
-3. 質疑 defect 視覺特徵強度（displace 在 parts_preview 看就很微妙）→ 回 Blender 加強參數或剔除 displace
+### Stage 3 — 進行中（2026-05-27 起）
+跳脫 Stage 2 baseline 的 defect IoU=0.004，完整計畫見 [docs/stage3_plan.md](docs/stage3_plan.md)。
+**核心改動**：
+1. **Two-head 架構（Design B）**：共用 encoder-decoder，head 1 part/bg + head 2 defect（只在 part 像素算 loss）
+2. **Loss**：head 1 CE / head 2 Dice + BCE 各 0.5；Adam lr=1e-3（從 Stage 2 SGD 0.01 改）
+3. **資料集擴充**：
+   - Displace 強度翻倍：light 0.15–0.30、heavy 0.40–0.80
+   - 新瑕疵 **Remesh Sharp**（octree_depth 7→light / 5→heavy）取代 Bevel（測試 Bevel 視覺無效）
+   - 背景換 **AmbientCG 真實工業紋理**（取代 12 張 procedural smooth-noise）+ composite 端加亮度/對比/彩度/翻轉 augmentation
+4. **6 種 debug viz**：normal vs defect diff / confidence heatmap / per-state IoU / FP-FN overlay / 訓練過程 snapshot / by-state confusion matrix
+
+**新檔案**：
+- `docs/stage3_plan.md`、`scripts/download_ambientcg.py`、`scripts/preview_bg_candidates.py`、`scripts/train_stage3.py`
+- `scripts/render_pan_head.py`、`scripts/composite.py` 已就地 patch（新 defect states + bg aug）
+
+**目標**：defect IoU 從 0.004 → > 0.30，mIoU 0.597 → > 0.65
 
 ### Stage 2 訓練排查重點 — 已解決
 - 之前 nbconvert 訓練 timeout 30 分鐘的**根因**：nbconvert 沒走 notebook 的 kernelspec，跑成 Windows Store Python 3.11（CPU-only torch）。Conda env `dl_final` 本身有 cu121 GPU torch。
