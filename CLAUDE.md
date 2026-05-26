@@ -86,15 +86,24 @@ docs/
 
 ## 目前進度
 
-- [x] Stage 1 完成：576 張 4-class 分類資料集 + 手刻 CNN baseline → test acc 100%
-- [x] Stage 2 方向確定：QC defect detection on pan_head
-- [x] Stage 2 計畫文件寫好（[stage2_plan.md](docs/stage2_plan.md)）
-- [x] Git 初始化、Stage 1 歸檔
-- [ ] **寫 `scripts/render_pan_head.py`**（modifier-enhanced renderer）
-- [ ] **跑 180 張 base part renders**
-- [ ] **下載 ~10 張背景紋理到 `assets/backgrounds/`**
-- [ ] **寫 `scripts/composite.py`**（場景合成 + ground truth 生成）
-- [ ] **跑 1000+ 場景**
-- [ ] **寫 `notebooks/train_stage2.ipynb`**（自製 encoder-decoder 訓練）
+### Stage 1（完成）
+576 張 4-class 分類資料集 + 手刻 CNN baseline → test acc 100%。`scripts/render_stage1.py`、`notebooks/train_stage1.ipynb` 保留封存。
+
+### Stage 2 — 資料端（完成）
+- [x] `scripts/render_pan_head.py`：180 張 pan_head 帶 modifier 瑕疵變體（normal / bend×2 / displace×2）
+- [x] `scripts/gen_backgrounds.py`：12 張程序化背景（concrete/metal/rubber/wood）
+- [x] `scripts/composite.py`：1000 張合成場景，含 semantic_mask + instance_mask + meta.json，允許重疊
+- 輸出在 `output/parts_stage2/` 與 `output/scenes/`，meta 在 `parts_meta.json` 與每場景 `meta.json`
+
+### Stage 2 — 訓練（in progress）
+- [x] `notebooks/train_stage2.ipynb`：自製 encoder-decoder + skip connection (5M params @ base_c=32)
+- [x] `scripts/train_stage2_runner.py`：相同邏輯的獨立 .py 版（base_c=16 較小、預載 RAM、有 timing print）
+- [!] **跑 nbconvert 訓練 cell 超時 30 分鐘**（未確認原因：模型大小 / IO bottleneck / 兩者）
+- [ ] **下一步**：用 `QUICK_TEST=True` 跑 notebook 估算單 epoch 時間，決定是否縮小模型或預載 RAM
 - [ ] Baseline 訓練評估
-- [ ] 整合 + 寫報告
+- [ ] 整合 + 寫 Stage 2 report
+
+### Stage 2 訓練排查重點
+- Notebook 有 `QUICK_TEST` 切換（30 張 × 2 epoch）能秒級驗證 + 印 epoch 時間
+- 若單 epoch > 30s → 用 [scripts/train_stage2_runner.py](scripts/train_stage2_runner.py)（base_c=16 模型 ~1.2M params，預載 RAM）
+- auto mode 不讓 Claude 自動執行新 .py，要手動 `& "C:\Users\Harrison\miniconda3\envs\dl_final\python.exe" scripts\train_stage2_runner.py`
