@@ -4,12 +4,26 @@
 
 ---
 
-## 任務升級
+## Stage 2 之後可擴充
 
-- **Object Detection (YOLOv8n)**：用 Blender Object Index pass 自動算 bbox，補進 CSV 的 `bbox_x/y/w/h` 欄位。CSV schema 已預留
-- **Instance Segmentation**：Object Index pass 同時可輸出 mask，CSV 已預留 `mask_path` 欄位
-- **多零件同框 (counting task)**：一個畫面放多個零件，挑戰計數與多目標偵測
-- **Sim-to-real 驗證**：拍少量真實照片當測試集，評估 domain gap
+### 任務面
+- **Instance separation under overlap**：純 semantic seg 在重疊區會把多實例合成一團 connected component。解法：(1) center prediction（per-pixel 對 instance center 的 offset）、(2) embedding-based clustering、(3) watershed post-processing
+- **Defect type 分類**：MVP 只區分 normal / defective，可進一步分 bend / displace / 其他
+- **Localized defect mask**：MVP 的 defect mask = 整個瑕疵零件 alpha。進階：用 Material Index pass 或 AOV 輸出 per-pixel 瑕疵位置
+- **零件種類擴充**：從 pan_head 擴回 4 種，多 class 分割 + 瑕疵組合任務
+- **Sim-to-real 驗證**：實體拍 pan_head 真實照片做 test set，評估 domain gap
+
+### Blender 端進階
+- **AOV output 自動瑕疵 mask**：shader 端做 procedural rust，AOV 輸出 rust factor 當 mask（針對表面瑕疵的 per-pixel mask）
+- **Material Index pass**：bend/displace 之外加 rust（獨立 material）+ Material Index pass 輸出每像素材質 → 自動 defect mask
+- **Cycles 渲染**：取代 EEVEE，金屬反射真實感大幅提升，1000+ 張要評估時間
+- **更多瑕疵幾何**：Boolean 缺角、Lattice 自由變形、Vertex weight 限制 displace 區域
+
+### 資料端進階
+- **小角度傾斜擾動**：composite 時對零件加 ±5° 旋轉模擬不完美姿態
+- **HDRI 旋轉 augmentation**：同 HDRI 用多種旋轉產生 4 倍光照變體（需引入 seeded random）
+- **景深 / 動態模糊 / 鏡頭雜訊**：模擬實際相機，增加 sim-to-real 真實感
+- **背景紋理擴充**：MVP 用 10 張，可擴充到 50–100 張覆蓋更多工業場景
 
 ## 資料多樣性
 

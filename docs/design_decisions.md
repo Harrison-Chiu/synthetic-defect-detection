@@ -49,13 +49,14 @@
 
 ---
 
-## 渲染角度策略
+## 渲染角度策略（Stage 1 採用版）
 
-**決定：Azimuth 8 個（每 45°），Elevation 3 個（15°/45°/75°）**
+**決定：12 elev (含仰視) × 3 azim × 4 hdri = 576 張（從原 8×3×3×4 改）**
 
-- 螺絲與螺母為旋轉對稱體（六角螺母每 60° 重複），繞 16 個角度大部分是 duplicate
-- 減少 azimuth 到 8 個，改增加 pose 種類（3 種擺放姿態）
-- 最終每類 288 張（8×3×3×4），總計 1152 張，比原估算 1536 更少但資訊密度更高
+- 推理零件軸對稱性 → pose 跟 camera orbit 對形狀視覺冗餘
+- 固定零件 pose=(0,0,0)，採樣自由度全給相機
+- 仰視角度加入因為 flange_nut 凸緣從下方看才有鑑別性
+- 從 1152 減為 576：每張資訊獨立、無重複，pure grid 完全可復現
 
 ---
 
@@ -69,13 +70,72 @@
 
 ---
 
-## 任務定義（本週）
+## 任務定義 — Stage 1（已封存）
 
 **決定：分類（4-class classification）**
 
 - 先驗證 pipeline 通，比直接做 detection 風險低
-- CSV schema 已預留 `bbox_x/y/w/h` 與 `mask_path` 欄位，下週升級不需改格式
-- 下週目標：Object Index pass 自動計算 bbox → 升級到 YOLOv8 detection
+- 結果：test acc 100%，pipeline 確認可行但問題太簡單
+- 詳細結果見 [stage1_mvp_report.md](stage1_mvp_report.md)
+
+---
+
+## 任務轉向 — Stage 2（當前）
+
+**決定：從 Sorting 改為 Quality Control / Defect Detection（瑕疵 segmentation）**
+
+理由：
+- Stage 1 的 100% acc 沒有鑑別性，需要難度更高的任務
+- QC 是真實工廠核心痛點，bonus 點：「合成資料解決瑕疵罕見」很學界
+- 老師明確說「不要套用開源模型架構、不要 pretrained」 → segmentation 從零實作比 YOLO 從零實作可行得多
+- 跟原 Sorting 比，QC 在 grading rubric 上一樣強或更強
+
+## 單一零件選擇
+
+**決定：pan_head（十字槽扁圓頭螺絲）**
+
+- 街上撿到一根螺絲就長那樣，typical screw 形象，對外講最直覺
+- 頭部十字槽提供獨特鑑別特徵
+- 頭 + 軸 + 螺紋三種瑕疵載體都齊全
+
+排除原因：
+- socket_head：內六角從上看有戲但對外不直觀（特殊規格）
+- hex_nut：幾何最簡單但缺乏「螺絲」的故事性
+- flange_nut：特徵最豐富但太特殊
+
+## 瑕疵生成策略
+
+**決定：Blender Modifier 為主（Bend + Displace）+ 全 Blender 渲染**
+
+- Bend / Displace 兩種 modifier 涵蓋「幾何彎曲」+「表面凹凸」兩大物理瑕疵類別
+- 純參數驅動，自動化超容易
+- 全 Blender 渲染（不用 Python 後處理瑕疵）：物理光照正確、敘事乾淨
+- 排除其他 modifier 的理由見 [stage2_plan.md](stage2_plan.md) modifier 評估表
+
+## 多零件場景合成
+
+**決定：Python composite（不是 Blender 多物件渲染）**
+
+- Blender 渲單張零件、Python 端拼場景，**繼承 Stage 1 的單張渲染格式**
+- composite 是純 2D 影像操作（PIL/cv2/numpy），速度比 Blender 快兩個數量級
+- ground truth (semantic mask + instance ID) 在 composite 過程「順便產生」，免標注
+- Blender 端只負責 3D（modifier 必須 3D 端做），責任清楚
+
+## Overlap 允不允
+
+**決定：允許重疊**
+
+- 真實工廠場景零件常重疊，強制不重疊脫離 reality
+- ground truth 端有完整 instance ID（composite 端記得住）
+- 模型端要不要解決重疊 instance 分離 → 給組員當研究題
+
+## 模型架構
+
+**決定：自製 Encoder-Decoder + skip connections，不用 pretrained，不抄 U-Net 名字**
+
+- 老師明確要求「自製優先，pretrained 扣分」
+- Encoder-Decoder 是通用設計模式，不算抄 U-Net；自己決定 channel/depth/activation 才是 tailored 設計
+- 從零訓練在 segmentation 比在 detection 容易得多 → 跟「no pretrained」約束更相容
 
 ---
 
