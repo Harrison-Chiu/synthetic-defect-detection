@@ -17,6 +17,16 @@
 - **原因**：Blender 5.x 已把 EEVEE Next 合併回叫 `BLENDER_EEVEE`（Blender 4.2–4.5 才是 `BLENDER_EEVEE_NEXT`）
 - **處理**：用 `BLENDER_EEVEE`（render.py 已改）
 
+### ✓ Displace modifier strength 是 LOCAL units，不是世界 meter（Stage 2 踩到）
+- **症狀**：Displace 改 strength=0.001~0.005 完全看不到效果
+- **誤判**：以為「視覺有差」其實只是切換 HDRI 造成的反射光差異（兩張不同 HDRI 的 normal 比較也是 15%）
+- **真相**：Displace strength 單位是 **物件 local space**，不是 world meter
+- **數學**：零件 scale=0.001、local 1 unit = 1mm 世界。要產生 1mm 世界 displacement 需要 strength=1（不是 0.001）
+- **MVP 採用範圍**（pan_head）：
+  - light: 0.05–0.15 → 約 0.05–0.15mm 世界 displacement（微妙表面變化）
+  - heavy: 0.20–0.40 → 約 0.2–0.4mm（明顯凹凸）
+- **debug 方法**：永遠用「同 HDRI 同角度的 normal vs defect」做 pixel diff 驗證，不要憑視覺
+
 ### ✓ HDRI 入鏡污染背景
 - **風險**：模型學到 HDRI 紋路當零件特徵，分類結果不可信
 - **處理**：`scene.render.film_transparent = True`（render.py 已加）
