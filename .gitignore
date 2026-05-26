@@ -1,0 +1,35 @@
+# ─── Generated outputs（可重渲，不上 git）───
+output/
+labels/metadata.csv
+
+# ─── HDRI 太大（348MB），請從 Poly Haven 下載 ───
+# 下載清單見 README / PLAN.md
+assets/hdri/*.exr
+
+# ─── Python ───
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.ipynb_checkpoints/
+*.egg-info/
+
+# ─── Blender ───
+*.blend1
+*.blend2
+*.blend@
+
+# ─── IDE ───
+.vscode/
+.idea/
+*.swp
+
+# ─── OS ───
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Claude Code 本機設定（不分享）───
+.claude/settings.local.json
