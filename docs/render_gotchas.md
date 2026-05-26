@@ -33,6 +33,16 @@
   - 同時建議 Harrison 在 Blender UI 勾掉 World → Ray Visibility → Camera 作為本機預設
 - **驗證**：渲出的 PNG 開起來背景是透明（棋盤格圖案）
 
+### ✓ nbconvert 跑訓練 → 用錯 Python（Stage 2 踩到）
+- **症狀**：`jupyter nbconvert --execute` 跑訓練 cell 超時 30 分鐘
+- **誤判**：以為是模型太大 / IO bottleneck
+- **真相**：nbconvert 沒按 notebook 的 `kernelspec.name=dl_final` 走，跑成 Windows Store Python 3.11（**CPU-only torch**）。Conda env `dl_final` 本身有 cu121 GPU torch。
+- **驗證方式**：腳本開頭 print `torch.cuda.is_available()` + `torch.cuda.get_device_name(0)`。看到 `cuda=True` 才往下跑
+- **解法**：
+  1. **首選**：VS Code / JupyterLab UI 開 notebook → 右上選 kernel `Python (dl_final)` → 跑
+  2. 批次 .py：`jupyter nbconvert --to script` → 開頭加 `matplotlib.use('Agg')` 防 `plt.show()` 阻塞 → `& "...\dl_final\python.exe" -u <script>` 直接跑
+- **效能對照**：CPU 5.3s/epoch (24 樣本) vs GPU 4060 0.3s/epoch ≈ **17× 加速**
+
 ### ✓ EEVEE Next 金屬反射
 - **風險**：不鏽鋼看起來像啞光塑膠
 - **處理**：`scene.eevee.use_raytracing = True`（render.py 已加）

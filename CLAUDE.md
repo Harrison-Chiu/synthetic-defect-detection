@@ -93,17 +93,26 @@ docs/
 - [x] `scripts/render_pan_head.py`：180 張 pan_head 帶 modifier 瑕疵變體（normal / bend×2 / displace×2）
 - [x] `scripts/gen_backgrounds.py`：12 張程序化背景（concrete/metal/rubber/wood）
 - [x] `scripts/composite.py`：1000 張合成場景，含 semantic_mask + instance_mask + meta.json，允許重疊
+- [x] **defect 比例調整**：原本 80% defect instance（uniform 抽 180 parts）→ 改 `DEFECT_PROB=0.2` per-instance 抽樣 → 實際 19.4%
+- [x] `scripts/preview_scenes.py`、`scripts/preview_parts.py`：mask 是 {0,1,2} 全黑值，上色才看得到
 - 輸出在 `output/parts_stage2/` 與 `output/scenes/`，meta 在 `parts_meta.json` 與每場景 `meta.json`
 
-### Stage 2 — 訓練（in progress）
-- [x] `notebooks/train_stage2.ipynb`：自製 encoder-decoder + skip connection (5M params @ base_c=32)
-- [x] `scripts/train_stage2_runner.py`：相同邏輯的獨立 .py 版（base_c=16 較小、預載 RAM、有 timing print）
-- [!] **跑 nbconvert 訓練 cell 超時 30 分鐘**（未確認原因：模型大小 / IO bottleneck / 兩者）
-- [ ] **下一步**：用 `QUICK_TEST=True` 跑 notebook 估算單 epoch 時間，決定是否縮小模型或預載 RAM
-- [ ] Baseline 訓練評估
-- [ ] 整合 + 寫 Stage 2 report
+### Stage 2 — Baseline 訓練（完成）
+- [x] `notebooks/train_stage2.ipynb`：3.3M params 自製 encoder-decoder (base_c=32, 4 stage)
+- [x] **GPU 訓練 30 epoch ~5 min**（4060），SGD lr=0.01 + weighted CE
+- [x] Test mIoU=0.597, pixel_acc=94%；但 **defect IoU=0.004**（baseline 主要失敗）
+- [x] `scripts/eval_stage2.py` + `docs/figures/stage2/`：5 張報告用圖 + summary
+- [x] 完整結果 + 失敗分析 + 下一步選項見 [docs/stage2_baseline_results.md](docs/stage2_baseline_results.md)
 
-### Stage 2 訓練排查重點
-- Notebook 有 `QUICK_TEST` 切換（30 張 × 2 epoch）能秒級驗證 + 印 epoch 時間
-- 若單 epoch > 30s → 用 [scripts/train_stage2_runner.py](scripts/train_stage2_runner.py)（base_c=16 模型 ~1.2M params，預載 RAM）
-- auto mode 不讓 Claude 自動執行新 .py，要手動 `& "C:\Users\Harrison\miniconda3\envs\dl_final\python.exe" scripts\train_stage2_runner.py`
+### Stage 2 — 下一步（討論中）
+**核心觀察**：confusion matrix 顯示「物件 vs 背景」幾乎完美（99.4% / 99.0%），失敗純粹在「normal vs defect」一刀（99.2% defect pixel 被預測成 normal）。
+**主要候選方向**（待跟組員討論）：
+1. **Two-head 架構** — 共用 encoder，part/bg binary head + defect head 解耦（Harrison 提議，confusion matrix 背書）
+2. 同 single-head 換 loss：Dice / Focal 對付 minority class，LR 降到 1e-3 + Adam
+3. 質疑 defect 視覺特徵強度（displace 在 parts_preview 看就很微妙）→ 回 Blender 加強參數或剔除 displace
+
+### Stage 2 訓練排查重點 — 已解決
+- 之前 nbconvert 訓練 timeout 30 分鐘的**根因**：nbconvert 沒走 notebook 的 kernelspec，跑成 Windows Store Python 3.11（CPU-only torch）。Conda env `dl_final` 本身有 cu121 GPU torch。
+- **執行 notebook 訓練的正確方式**：在 VS Code/Jupyter UI 打開 → 選 kernel `Python (dl_final)` → 跑
+- **要用 .py 跑訓練**：先 `jupyter nbconvert --to script`、加 `matplotlib.use('Agg')` 防 plt.show 卡住、用 `& "C:\Users\Harrison\miniconda3\envs\dl_final\python.exe" -u <script>` 跑
+- `scripts/train_stage2_runner.py`（base_c=16 備案）目前**不需要**了 — 完整 baseline GPU 跑 5 分鐘輕鬆
