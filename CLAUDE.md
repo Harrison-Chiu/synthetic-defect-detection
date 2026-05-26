@@ -106,31 +106,29 @@ docs/
 - [x] `scripts/eval_stage2.py` + `docs/figures/stage2/`：5 張報告用圖 + summary
 - [x] 完整結果 + 失敗分析 + 下一步選項見 [docs/stage2_baseline_results.md](docs/stage2_baseline_results.md)
 
-### Stage 3 — 進行中（2026-05-27 起）
-跳脫 Stage 2 baseline 的 defect IoU=0.004，完整計畫見 [docs/stage3_plan.md](docs/stage3_plan.md)。
+### Stage 3 — 完成（2026-05-27）
+完整計畫見 [docs/stage3_plan.md](docs/stage3_plan.md)，結果見 [docs/stage3_results.md](docs/stage3_results.md)。
 
-**設計三大改動**：
+**三大改動**：
 1. **Two-head 架構**：共用 encoder-decoder，head 1 part/bg + head 2 defect（只在 part 像素算 loss）
 2. **Loss**：head 1 CE / head 2 Dice 0.5 + BCE 0.5；Adam lr=1e-3
 3. **資料**：displace 強度翻倍、新增 **Remesh Sharp** 瑕疵、背景改 **Domain Randomization 策略**（5 真實 AmbientCG + 12 procedural + 純色三選一 + 非均勻數量的程序化 distractors）+ 黑底 ablation 對照組
 
-**檔案狀態（commit `dee4f59`）**：
-- `docs/stage3_plan.md`、`scripts/{download_ambientcg, preview_bg_candidates, gen_black_bg_test, train_stage3}.py` 新增
-- `scripts/{render_pan_head, composite}.py` 就地 patch
-- `assets/backgrounds_real/`（5 張：cand 01/04/13/23/24）、`assets/backgrounds_procedural/`（12 張）就位
-- 背景配方表詳見 stage3_plan.md「背景策略 v2」段
+**結果（Test 100 場景）**：
 
-**已完成**：✅ 計畫文件 ✅ script 全寫好 ✅ 5 張背景挑完 ✅ commit 留底  
-**待執行**（Phase 2/3）：
-1. Harrison 在 Blender UI 跑 `render_pan_head.py`（產 252 張 = 36 pose × 7 defect_state）
-2. Claude 跑 `python scripts/composite.py` 重出 1000 場景
-3. Claude 跑 `python scripts/preview_scenes.py` 視覺檢查 → Harrison 看
-4. Claude 跑 `python scripts/gen_black_bg_test.py` 出黑底對照組
-5. Claude 跑 `python scripts/train_stage3.py`（~10 min on 4060）
-6. 寫 `scripts/eval_stage3.py` → 6 張 debug viz（A normal/defect diff、B confidence heatmap、C per-state IoU、D FP/FN overlay、E epoch snapshots、F by-state confusion matrix）
-7. 寫 `docs/stage3_results.md` 對比 Stage 2 → Stage 3
+| 指標 | Stage 2 | Stage 3 目標 | **Stage 3 實際** |
+|------|--------:|-------------:|------------------:|
+| mIoU | 0.597 | > 0.65 | **0.712** ✅ |
+| pixel_acc | 94.0% | > 94% | **94.1%** ✅ |
+| **defect IoU** | **0.004** | **> 0.30** | **0.362** ✅ (90×) |
 
-**目標**：defect IoU 0.004 → > 0.30，mIoU 0.597 → > 0.65
+**Per-state defect IoU**: displace 0.39–0.43 最強、remesh 0.16–0.28 中等、**bend 0.006–0.024 失敗**（256px 解析度下視覺 signal 太弱，不是模型容量問題）。
+
+**Ablation（textured DR vs 黑底）**: mIoU 0.712 → 0.678，defect IoU 0.362 → 0.319 — 模型沒靠背景 shortcut，DR 策略成功。
+
+**8 張報告圖在 `docs/figures/stage3/`**：A normal/defect diff、B confidence heatmap、C per-state IoU box、D FP/FN overlay、E epoch snapshots、F by-state confusion、ablation bar、training curves。
+
+**Artifact**：`output/stage3_best_model.pt`、`output/stage3_history.json`、`output/stage3_epoch_snapshots/`、`output/scenes_black/` (100 ablation)。
 
 ### Stage 2 訓練排查重點 — 已解決
 - 之前 nbconvert 訓練 timeout 30 分鐘的**根因**：nbconvert 沒走 notebook 的 kernelspec，跑成 Windows Store Python 3.11（CPU-only torch）。Conda env `dl_final` 本身有 cu121 GPU torch。
