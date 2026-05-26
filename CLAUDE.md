@@ -108,20 +108,29 @@ docs/
 
 ### Stage 3 — 進行中（2026-05-27 起）
 跳脫 Stage 2 baseline 的 defect IoU=0.004，完整計畫見 [docs/stage3_plan.md](docs/stage3_plan.md)。
-**核心改動**：
-1. **Two-head 架構（Design B）**：共用 encoder-decoder，head 1 part/bg + head 2 defect（只在 part 像素算 loss）
-2. **Loss**：head 1 CE / head 2 Dice + BCE 各 0.5；Adam lr=1e-3（從 Stage 2 SGD 0.01 改）
-3. **資料集擴充**：
-   - Displace 強度翻倍：light 0.15–0.30、heavy 0.40–0.80
-   - 新瑕疵 **Remesh Sharp**（octree_depth 7→light / 5→heavy）取代 Bevel（測試 Bevel 視覺無效）
-   - 背景換 **AmbientCG 真實工業紋理**（取代 12 張 procedural smooth-noise）+ composite 端加亮度/對比/彩度/翻轉 augmentation
-4. **6 種 debug viz**：normal vs defect diff / confidence heatmap / per-state IoU / FP-FN overlay / 訓練過程 snapshot / by-state confusion matrix
 
-**新檔案**：
-- `docs/stage3_plan.md`、`scripts/download_ambientcg.py`、`scripts/preview_bg_candidates.py`、`scripts/train_stage3.py`
-- `scripts/render_pan_head.py`、`scripts/composite.py` 已就地 patch（新 defect states + bg aug）
+**設計三大改動**：
+1. **Two-head 架構**：共用 encoder-decoder，head 1 part/bg + head 2 defect（只在 part 像素算 loss）
+2. **Loss**：head 1 CE / head 2 Dice 0.5 + BCE 0.5；Adam lr=1e-3
+3. **資料**：displace 強度翻倍、新增 **Remesh Sharp** 瑕疵、背景改 **Domain Randomization 策略**（5 真實 AmbientCG + 12 procedural + 純色三選一 + 非均勻數量的程序化 distractors）+ 黑底 ablation 對照組
 
-**目標**：defect IoU 從 0.004 → > 0.30，mIoU 0.597 → > 0.65
+**檔案狀態（commit `dee4f59`）**：
+- `docs/stage3_plan.md`、`scripts/{download_ambientcg, preview_bg_candidates, gen_black_bg_test, train_stage3}.py` 新增
+- `scripts/{render_pan_head, composite}.py` 就地 patch
+- `assets/backgrounds_real/`（5 張：cand 01/04/13/23/24）、`assets/backgrounds_procedural/`（12 張）就位
+- 背景配方表詳見 stage3_plan.md「背景策略 v2」段
+
+**已完成**：✅ 計畫文件 ✅ script 全寫好 ✅ 5 張背景挑完 ✅ commit 留底  
+**待執行**（Phase 2/3）：
+1. Harrison 在 Blender UI 跑 `render_pan_head.py`（產 252 張 = 36 pose × 7 defect_state）
+2. Claude 跑 `python scripts/composite.py` 重出 1000 場景
+3. Claude 跑 `python scripts/preview_scenes.py` 視覺檢查 → Harrison 看
+4. Claude 跑 `python scripts/gen_black_bg_test.py` 出黑底對照組
+5. Claude 跑 `python scripts/train_stage3.py`（~10 min on 4060）
+6. 寫 `scripts/eval_stage3.py` → 6 張 debug viz（A normal/defect diff、B confidence heatmap、C per-state IoU、D FP/FN overlay、E epoch snapshots、F by-state confusion matrix）
+7. 寫 `docs/stage3_results.md` 對比 Stage 2 → Stage 3
+
+**目標**：defect IoU 0.004 → > 0.30，mIoU 0.597 → > 0.65
 
 ### Stage 2 訓練排查重點 — 已解決
 - 之前 nbconvert 訓練 timeout 30 分鐘的**根因**：nbconvert 沒走 notebook 的 kernelspec，跑成 Windows Store Python 3.11（CPU-only torch）。Conda env `dl_final` 本身有 cu121 GPU torch。
