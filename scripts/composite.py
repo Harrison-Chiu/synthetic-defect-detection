@@ -31,6 +31,10 @@ SCALE_RANGE  = (0.5, 1.0)      # 縮放比例
 ROT_RANGE    = (0, 360)        # in-plane rotation
 SEED         = 42
 
+# 每個 instance 是 defect 的機率（真實 QC 通常 < 10%；我們選 20% 以保留足夠訓練樣本）
+# 影響：1000 場景 × 平均 5 instance ≈ 5000，其中 ~1000 defective、~4000 normal
+DEFECT_PROB  = 0.20
+
 # Semantic class 編碼
 CLS_BG     = 0
 CLS_NORMAL = 1
@@ -43,15 +47,25 @@ DEFECT_STATES_DEFECTIVE = {"bend_light", "bend_heavy", "displace_light", "displa
 # ─────────────────────────────────────────────
 
 def load_part_index():
-    """掃 parts_stage2/，回傳 [(path, defect_state)] list"""
-    parts = []
+    """掃 parts_stage2/，分成 normal / defective 兩個 pool。回傳 (normal_list, defect_list)"""
+    normal_pool, defect_pool = [], []
     for state_dir in sorted(os.listdir(PARTS_DIR)):
         full = os.path.join(PARTS_DIR, state_dir)
         if not os.path.isdir(full):
             continue
+        target = defect_pool if state_dir in DEFECT_STATES_DEFECTIVE else normal_pool
         for png in sorted(glob.glob(os.path.join(full, "*.png"))):
-            parts.append((png, state_dir))
-    return parts
+            target.append((png, state_dir))
+    return normal_pool, defect_pool
+
+
+def sample_parts(n, normal_pool, defect_pool, rng):
+    """每個 instance 以 DEFECT_PROB 機率從 defect_pool 抽，否則從 normal_pool 抽"""
+    chosen = []
+    for _ in range(n):
+        pool = defect_pool if rng.random() < DEFECT_PROB else normal_pool
+        chosen.append(pool[rng.randint(len(pool))])
+    return chosen
 
 
 def load_backgrounds():
@@ -84,7 +98,7 @@ def alpha_bbox(alpha, threshold=10):
     return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
 
 
-def composite_scene(scene_idx, parts, bgs, rng):
+def composite_scene(scene_idx, normal_pool, defect_pool, bgs, rng):
     """產生一張 scene"""
     # 1) 選背景並 crop 256
     bg_path = bgs[rng.randint(len(bgs))]
@@ -97,9 +111,9 @@ def composite_scene(scene_idx, parts, bgs, rng):
     semantic = np.zeros((OUT_SIZE, OUT_SIZE), dtype=np.uint8)
     instance = np.zeros((OUT_SIZE, OUT_SIZE), dtype=np.uint8)
 
-    # 2) 隨機選 N 個零件
+    # 2) 隨機選 N 個零件（per-instance DEFECT_PROB 抽樣）
     n_parts = rng.randint(PARTS_RANGE[0], PARTS_RANGE[1] + 1)
-    chosen  = [parts[rng.randint(len(parts))] for _ in range(n_parts)]
+    chosen  = sample_parts(n_parts, normal_pool, defect_pool, rng)
 
     placed_meta = []
 
@@ -184,17 +198,28 @@ def composite_scene(scene_idx, parts, bgs, rng):
 
 def main():
     rng = np.random.RandomState(SEED)
-    parts = load_part_index()
+    normal_pool, defect_pool = load_part_index()
     bgs   = load_backgrounds()
-    print(f"Loaded {len(parts)} parts, {len(bgs)} backgrounds")
+    print(f"Loaded {len(normal_pool)} normal + {len(defect_pool)} defect parts, "
+          f"{len(bgs)} backgrounds (DEFECT_PROB={DEFECT_PROB})")
     os.makedirs(SCENES_DIR, exist_ok=True)
 
     for i in range(N_SCENES):
-        composite_scene(i, parts, bgs, rng)
+        composite_scene(i, normal_pool, defect_pool, bgs, rng)
         if (i + 1) % 100 == 0:
             print(f"  [{i+1}/{N_SCENES}] scenes done")
 
+    # 統計實際分布
+    n_total, n_def, n_def_scenes = 0, 0, 0
+    for sid in range(N_SCENES):
+        mp = os.path.join(SCENES_DIR, f"{sid:05d}", "meta.json")
+        m = json.load(open(mp, encoding="utf-8"))
+        n_total += m["n_parts"]; n_def += m["n_defective"]
+        if m["n_defective"] > 0:
+            n_def_scenes += 1
     print(f"\nDone. {N_SCENES} scenes → {SCENES_DIR}")
+    print(f"Actual ratio: {n_def}/{n_total} instances defective ({n_def/n_total*100:.1f}%); "
+          f"{n_def_scenes}/{N_SCENES} scenes contain ≥1 defect ({n_def_scenes/N_SCENES*100:.1f}%)")
 
 
 if __name__ == "__main__":
