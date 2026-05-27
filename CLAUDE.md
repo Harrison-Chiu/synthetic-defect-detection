@@ -130,6 +130,18 @@ docs/
 
 **Artifact**：`output/stage3_best_model.pt`、`output/stage3_history.json`、`output/stage3_epoch_snapshots/`、`output/scenes_black/` (100 ablation)。
 
+**遠端檢視用 HTML 報告**：`docs/stage3_report.html`（3.2 MB 單檔，圖 base64 內嵌），生成 script `scripts/build_stage3_html.py`。已上傳到 Google Drive 共用資料夾 `G:\我的雲端硬碟\大學 中山\大四下_深度學習\深度學習_雲端共用\`（同時放了 stage3_results.md / stage3_plan.md / stage2_baseline_results.md / figures_stage3/ 完整一套給組員）。
+
+**訓練動態踩雷**：epoch 30 val mIoU 突然從 0.71 崩到 0.49（best epoch=26, mIoU=0.716）。原因推測 Adam lr 沒 decay + Dice loss 在 zero-defect batch 不穩。test 用 best_state 跑（epoch 26 weight），所以 test=0.712 沒受影響；但 FIG E epoch snapshot 顯示的 epoch 30 是 last 不是 best，看起來變糟是真的。下次加 `ReduceLROnPlateau` 或早停。
+
+**問題診斷小結（給之後討論用）**：
+- 模型架構 ✅ Two-head 有效
+- Loss ✅ Dice+BCE 解了 class imbalance
+- 資料量 ✅ 1000 場景夠
+- **資料 signal — bend ❌ 是剩下唯一瓶頸**：256 px 下 bend 物理上幾乎沒像素差異（FIG F 顯示 93% bend 像素被預測為 normal，等於 model 在猜 majority）。要解必須動資料端（拉相機焦距/角度 60°+/側面視角），動模型無用。
+- 資料 signal — displace ✅ saturate 在 0.43
+- 資料 signal — remesh 🟡 0.16–0.28 中等
+
 ### Stage 2 訓練排查重點 — 已解決
 - 之前 nbconvert 訓練 timeout 30 分鐘的**根因**：nbconvert 沒走 notebook 的 kernelspec，跑成 Windows Store Python 3.11（CPU-only torch）。Conda env `dl_final` 本身有 cu121 GPU torch。
 - **執行 notebook 訓練的正確方式**：在 VS Code/Jupyter UI 打開 → 選 kernel `Python (dl_final)` → 跑
