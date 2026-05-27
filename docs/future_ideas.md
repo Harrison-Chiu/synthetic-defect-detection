@@ -4,6 +4,26 @@
 
 ---
 
+## Stage 4+ 已記錄但不在當前 stage 採用
+
+### Loss / 訓練優化
+- **Uncertainty Weighting (Kendall et al. 2018, CVPR)** — 每個 task 學 trainable log σ²，loss = Σᵢ exp(-log_var_i) * L_i + 0.5 * log_var_i。自動 balance 多任務 weight，3 行 code、每 head 多 1 個 scalar。Stage 4 先用 weighted sum，跑通後考慮升級
+- **Hierarchical / Consistency Loss** — head B (state 7-way) argmax collapse 到 type 應該 = head C (type 4-way) argmax；不一致加 KL penalty。實作不難，是 multi-head 監督的延伸
+- **GradNorm (Chen 2018)** — 動態調整 weight 平衡 gradient norm。比 Uncertainty Weighting 複雜
+- **PCGrad (Yu 2020)** — project conflicting gradients。解 task conflict 不解 weight balance
+
+### 模型架構
+- **Localized defect mask** — 目前 defect label = 整顆瑕疵零件 alpha（bend 的螺絲頭也被標 defect → noise）。改用 Blender Material Index pass 或 vertex weight 輸出真正彎曲區域。對 bend 影響可能比換 head 還大，但工作量大
+- **Domain Adversarial Training** — bottleneck 加 GRL + HDRI classifier，強迫 encoder 丟掉光照資訊。DR 已部分達成，邊際效益不確定
+- **Image-level aux head（光照/角度）** — 從 bottleneck 接 global pool + FC 預測 HDRI class / camera az 等 scene-level label。Stage 4 暫不做（segmentation 主任務已足夠複雜）
+
+### 資料端
+- **Bend 也限縮 elevation** — Stage 4 已修 azimuth，elevation ±60° 仍會壓縮投影，可額外限縮 |el| ≤ 30
+- **Cycles 渲染**、**HDRI 旋轉 aug**、**焦距 / HDRI strength jitter**、**真實 OBJ distractors** — 都是邊際改善，工作量大
+- **拉 bend 強度到 60°+** — 物理上接近斷裂，但 visually distinguishable
+
+---
+
 ## Stage 2 之後可擴充
 
 ### 任務面

@@ -142,6 +142,27 @@ docs/
 - 資料 signal — displace ✅ saturate 在 0.43
 - 資料 signal — remesh 🟡 0.16–0.28 中等
 
+### Stage 4 — 規劃中（2026-05-28）
+
+完整計畫見 **[docs/stage4_plan.md](docs/stage4_plan.md)**（含定案、討論中、延後項；要拿給另一位助手討論）。
+
+**核心 root cause（拆 head 後診斷）**：FIG F1/F2 證實 bend 失敗源自 head 2 看不到 signal，**不是 head 1 漏 part、不是模型容量**。再追下去發現兩個 bug：
+1. **`render_pan_head.py` bend axis 隨機選 X/Y，跟 camera az 無關** → 50% 樣本「彎進畫面」silhouette 沒變化（user 抓到的）
+2. **`render_pan_head.py` 寫死只用 2 個 HDRI，但 `assets/hdri/` 實際有 4 個**（user 抓到的）
+3. **composite.py 同 scene 內 instance 來自不同 HDRI 渲染** → 物理不一致
+
+**Stage 4 ✅ 定案**：
+- **架構**：Multi-head V4 = A (part/bg, 2) + B (defect_state, **7-way**) + C (defect_type, **4-way**) + E (binary defect, 1)；**砍掉 D severity**（per-instance label 不適合 pixel-level）
+- **Loss**：先用 weighted sum (α=1.0)，**Uncertainty Weighting (Kendall 2018) 已記錄但 Stage 4 不採用**（往後優化）
+- **Bend**：deform_axis 改用 **Empty `origin` + ±30° jitter** 實作（user 決定：不要強制必定垂直，但偏離不超過 30°）
+- **Remesh**：新 light = 舊 heavy；新 heavy = 再激進一級
+- **HDRI**：補回 4 個 + composite 強制同 scene 用同 HDRI
+- **解析度維持 256**（user 駁回我提的 384，bend 是 macro 問題不是 pixel 問題）
+
+**🟡 討論中（要跟另一位助手討論）**：α 權重、Dice 怎麼算、bend elevation 是否也限縮、新 remesh_heavy 具體 octree_depth、總部件數量、資料集規模、defect ratio / focal / HDRI strength 等微改動全砍還是部分留。
+
+**📝 已記錄不做（往後優化）**：Uncertainty Weighting、Hierarchical consistency loss、Localized defect mask、GradNorm/PCGrad、Domain Adversarial Training、image-level aux head（光照/角度）。
+
 ### Stage 2 訓練排查重點 — 已解決
 - 之前 nbconvert 訓練 timeout 30 分鐘的**根因**：nbconvert 沒走 notebook 的 kernelspec，跑成 Windows Store Python 3.11（CPU-only torch）。Conda env `dl_final` 本身有 cu121 GPU torch。
 - **執行 notebook 訓練的正確方式**：在 VS Code/Jupyter UI 打開 → 選 kernel `Python (dl_final)` → 跑
