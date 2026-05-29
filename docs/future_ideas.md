@@ -4,6 +4,61 @@
 
 ---
 
+## Stage 5 候選（Stage 4 結案時記錄，2026-05-28）
+
+按優先順序，每項標「為何 Stage 4 沒做」+「期望效果」。
+
+### 🔴 高優先 — Stage 4 留下的未解問題
+
+#### 1. Displace 退步診斷與修復
+- **背景**：Stage 3 displace IoU 0.78/0.93 → Stage 4 0.235/0.763。渲染參數**完全沒改**，唯一變因是 HDRI pool 從 2 → 4
+- **假設**：新加的 `monochrome_studio_02`（純白光）+ `pretoria_gardens`（室外柔光）讓 displace 的 normal-perturbation 反射訊號變平。強光下 displace 凹凸面有明顯陰影，柔光下訊號散
+- **驗證方法（單變因實驗）**：渲 4 顆 displace_heavy × 4 HDRI 對照，計算「每 HDRI 下的 displace pixel intensity std」量化視覺強度差
+- **可能 fix**：
+  - 移除 2 個柔光 HDRI（退回到 strong directional lighting only）
+  - 或加大 displace strength range（補償柔光下的訊號損失）
+  - 或 normalize 渲染後的 displace 強度（先測量再調 per-HDRI 參數）
+- **為何 Stage 4 沒做**：訓練完才發現退步，時間壓力下選擇結案
+
+#### 2. Bend IoU 從 0.08 → 0.15+（單變因實驗）
+- **現況**：Stage 4 best bend_l=0.062, bend_h=0.079（落在 plan decision point 0.05-0.15 區間「應加碼」）
+- **三個候選改動（單變因跑，看哪個影響最大）**：
+  - **(a) Elevation 限縮**：bend instance 的相機 elevation 限 `|el| ≤ 30°`。原因：俯視/仰視 60° 把 bend 弧 cos(60°)=0.5 壓縮。代價 bend 樣本減少 33%
+  - **(b) Focal length 拉長**：85mm → 130mm（×1.5）。每樣本 bend 弧多佔幾個像素。代價場景空間感變少，可能要少放 distractor
+  - **(c) Bend angle 拉到 60°**：物理上接近斷裂但 visually distinguishable。從 `BEND_HEAVY_RANGE=(25,45)` 改成 `(50,70)` 試試
+- **建議順序**：先 (a)（最便宜），不夠再 (c)，再不夠才 (b)
+- **為何 Stage 4 沒做**：plan 上明確列「不做 — 等修 axis 後看數字再決定」，結果落在 grey zone 但時間壓力下沒做
+
+#### 3. Multi-head 救活（α 重新加權 或 Uncertainty Weighting）
+- **Stage 4 failure mode 量化**：L_A=0.063 (3%)，L_B+L_C ≈ 2.17 (97%)。Encoder 梯度被 aux task 主導，主任務學不好
+- **三個救活方向**：
+  - **(a) α_B = α_C = 0.1 ~ 0.3** — 暴力但簡單，可能 0.1 就夠
+  - **(b) Uncertainty Weighting (Kendall 2018)** — 每 task 學 trainable log σ²，自動 balance。3 行 code 每 head 多 1 scalar
+  - **(c) 砍 binary head，純用 7-way B 推論時 collapse**：完全沒 aux conflict
+- **建議**：(c) 最乾淨 — 跟 Harrison 立場一致（B 7-way 已含全部資訊）。(b) 是學術賣點
+- **為何 Stage 4 沒做**：架構失敗後選擇放棄 multi-head，沒進階修復
+
+### 🟡 中優先 — 模型穩定性 / 訓練品質
+
+#### 4. ReduceLROnPlateau 合併到 single-head 訓練
+- **Stage 3 / Stage 4 single-head 都有 epoch 30 val mIoU 突崩問題**（從 0.73 → 0.46）
+- **Stage 4 multi-head 加了 `ReduceLROnPlateau(mode="max", factor=0.5, patience=3)` 收斂穩定，沒崩**
+- **Fix**：把同樣 scheduler 加進 `train_stage3.py`。3 行改動
+- **為何 Stage 4 沒做**：ablation 跑時懶得改，直接複用原檔。Test 用 best_state 所以結果不受影響，但訓練曲線難看
+
+#### 5. ResolutionLossOnPlateau 早停 / best-only test
+- 跟 #4 連帶。早停可以省訓練時間（best 通常在 epoch 25-28，跑完 30 是多餘）
+- **為何 Stage 4 沒做**：30 epoch 才 5 分鐘，省這個時間意義不大
+
+### 🟢 低優先 — 報告 / 視覺化
+
+#### 6. Per-state binary recall vs 7-way IoU metric 釐清
+- **Stage 4 踩到**：`eval_stage4.py` 的「per-state IoU」是 head B 7-way argmax 嚴格 IoU，跟 Stage 3 報告的「per-state defect detection rate」（binary）不可比
+- **Fix**：在報告/HTML 明確標 schema，或統一只用 binary detection rate
+- **已做**：`eval_stage4_compare.py` 用 binary，數字才能跟 Stage 3 對齊
+
+---
+
 ## Stage 4+ 已記錄但不在當前 stage 採用
 
 ### Loss / 訓練優化

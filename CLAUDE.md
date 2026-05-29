@@ -142,26 +142,55 @@ docs/
 - 資料 signal — displace ✅ saturate 在 0.43
 - 資料 signal — remesh 🟡 0.16–0.28 中等
 
-### Stage 4 — 規劃中（2026-05-28）
+### Stage 4 — 完成（2026-05-28）
 
-完整計畫見 **[docs/stage4_plan.md](docs/stage4_plan.md)**（含定案、討論中、延後項；要拿給另一位助手討論）。
+完整結果見 **[docs/stage4_results.md](docs/stage4_results.md)**、HTML 報告 `docs/stage4_report.html`。計畫存檔 [docs/stage4_plan.md](docs/stage4_plan.md)。
 
-**核心 root cause（拆 head 後診斷）**：FIG F1/F2 證實 bend 失敗源自 head 2 看不到 signal，**不是 head 1 漏 part、不是模型容量**。再追下去發現兩個 bug：
-1. **`render_pan_head.py` bend axis 隨機選 X/Y，跟 camera az 無關** → 50% 樣本「彎進畫面」silhouette 沒變化（user 抓到的）
-2. **`render_pan_head.py` 寫死只用 2 個 HDRI，但 `assets/hdri/` 實際有 4 個**（user 抓到的）
-3. **composite.py 同 scene 內 instance 來自不同 HDRI 渲染** → 物理不一致
+**TL;DR**：兩條獨立路徑 — (1) 資料 bug fix + 強化、(2) Multi-head 架構嘗試。
+- **路徑 1 成功**：S3 arch + S4 新資料 → **defect IoU 0.385**（vs S3 baseline 0.362, +0.023）
+- **路徑 2 失敗**：Multi-head (A+B+C) → 0.342（L_A 只佔總 loss 3%，aux head 把 encoder bandwidth 吃掉）
+- **最終 best 採 single-head + 新資料**，multi-head 進 ablation
 
-**Stage 4 ✅ 定案**：
-- **架構**：Multi-head V4 = A (part/bg, 2) + B (defect_state, **7-way**) + C (defect_type, **4-way**) + E (binary defect, 1)；**砍掉 D severity**（per-instance label 不適合 pixel-level）
-- **Loss**：先用 weighted sum (α=1.0)，**Uncertainty Weighting (Kendall 2018) 已記錄但 Stage 4 不採用**（往後優化）
-- **Bend**：deform_axis 改用 **Empty `origin` + ±30° jitter** 實作（user 決定：不要強制必定垂直，但偏離不超過 30°）
-- **Remesh**：新 light = 舊 heavy；新 heavy = 再激進一級
-- **HDRI**：補回 4 個 + composite 強制同 scene 用同 HDRI
-- **解析度維持 256**（user 駁回我提的 384，bend 是 macro 問題不是 pixel 問題）
+**Per-state（best 模型 vs S3）**：
+| State | S3 | S4 best | 變化 |
+|-------|---:|---:|---:|
+| bend_light | 0.034 | 0.062 | +0.028 |
+| bend_heavy | 0.047 | 0.079 | +0.032 |
+| **displace_light** | 0.780 | **0.235** | **-0.545 意外退步** |
+| displace_heavy | 0.932 | 0.763 | -0.169 |
+| remesh_light | 0.324 | **0.794** | +0.470 |
+| remesh_heavy | 0.523 | **0.859** | +0.336 |
 
-**🟡 討論中（要跟另一位助手討論）**：α 權重、Dice 怎麼算、bend elevation 是否也限縮、新 remesh_heavy 具體 octree_depth、總部件數量、資料集規模、defect ratio / focal / HDRI strength 等微改動全砍還是部分留。
+**Bend axis 修正關鍵踩雷**（前兩次都錯）：
+1. 第一次 Empty origin + axis_yaw=`az+π/2` → bend 弧 ⊥ image plane = 看不到（軸算反）
+2. 第二次 axis_yaw=`az` + Empty origin → 變圓錐（Empty local frame 跟 SIMPLE_DEFORM 的座標互動有坑，文件講不清）
+3. **第三次成功**：放棄 Empty，**直接旋轉 pan_head 自身 α=az+jitter 度繞 Z + deform_axis="X"**，bend 弧落 image plane 可見
+- **教訓**：SIMPLE_DEFORM 的 `origin` 物件如何映射 deform_axis 在 Blender 文件講不清，**直接旋轉物件比較可控**
 
-**📝 已記錄不做（往後優化）**：Uncertainty Weighting、Hierarchical consistency loss、Localized defect mask、GradNorm/PCGrad、Domain Adversarial Training、image-level aux head（光照/角度）。
+**Multi-head 失敗模式（給 Stage 5 用）**：
+- 訓練尾段 loss 分解：L_A=0.063 (3%)、L_B+L_C=2.17 (97%) → 主任務梯度被 aux 主導
+- α_B = α_C = 1.0 直接 sum 是錯的，下次要 0.1 ~ 0.3 或 Uncertainty Weighting (Kendall 2018)
+- 或更乾淨：完全砍 binary head，只用 B 7-way 推論時 argmax collapse
+
+**Displace 退步是新發現**（未診斷完成，留 Stage 5）：
+- 渲染參數沒改，只是 HDRI pool 2 → 4
+- 推論：新加的 `monochrome_studio_02`（純白光）+ `pretoria_gardens`（室外柔光）讓 displace 反射訊號變平
+- **sim-2-real 的縮影** — 同樣的 defect 在不同光照下「可學程度」差很多
+- 待調查：渲 displace_heavy × 4 HDRI 對照，量化視覺強度差
+
+**Decision point 處理**：bend IoU 落 0.05–0.15 區間（plan 規定要加碼），但因報告期限 5 天 + 現有結果已超 S3，**選擇結案 + future_ideas.md 記錄**：
+- Bend elevation ∈ [-30, 30] 限縮
+- Focal length 拉長 1.5×
+- Bend angle 60°+ 試（單變因）
+- 上述都列為 phase 2 候選但 Stage 4 不做
+
+**Artifact**：
+- `output/stage4_singlehead_best.pt`（最終 best，defect IoU 0.385）
+- `output/stage4_best_model.pt`（multi-head ablation）
+- `output/parts_stage2/` 504 張新 render
+- `output/scenes/` 1000 + `output/scenes_black/` 100
+- `docs/figures/stage4/` 報告圖（compare_overall、compare_per_state、B_state_confusion、C_type_confusion、ablation_bar、training_curves）
+- Drive 已同步 `G:\我的雲端硬碟\大學 中山\大四下_深度學習\深度學習_雲端共用\`（含 stage4_plan.md、stage4_results.md、stage4_report.html、figures_stage4/、model_stage4/）
 
 ### Stage 2 訓練排查重點 — 已解決
 - 之前 nbconvert 訓練 timeout 30 分鐘的**根因**：nbconvert 沒走 notebook 的 kernelspec，跑成 Windows Store Python 3.11（CPU-only torch）。Conda env `dl_final` 本身有 cu121 GPU torch。

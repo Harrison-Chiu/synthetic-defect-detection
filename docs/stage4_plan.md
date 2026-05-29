@@ -1,237 +1,173 @@
-# Stage 4 計畫 — Multi-head 監督 + Bend 視覺信號修正
+# Stage 4 計畫 — Bug 修復 + 細粒度監督
 
-> 起草：2026-05-28（討論中，未開工）
-> 前情：[stage3_results.md](stage3_results.md)、[stage3_plan.md](stage3_plan.md)
-> 目的：解決 Stage 3 剩下的兩個瓶頸 — (1) **bend 看不見**（F2 顯示 head 2 只給 3-5% defect probability），(2) **單一 binary defect head 標籤利用率低**（meta 已含 defect_state / type / severity 但訓練只用 binary）
-
----
-
-## 1. Stage 3 診斷回顧（為什麼要做 Stage 4）
-
-### 1.1 KPI vs 失敗點
-
-| 類別 | Test defect IoU |
-|------|----------------:|
-| displace_heavy | 0.428 ✅ |
-| displace_light | 0.391 ✅ |
-| remesh_heavy | 0.276 🟡 |
-| remesh_light | 0.155 🟡（看起來幾乎不可辨）|
-| bend_heavy | **0.024** ❌ |
-| bend_light | **0.006** ❌ |
-
-### 1.2 拆 head 後的明確診斷（FIG F1 / F2）
-
-- **Head 1 (part/bg)**：所有 defect state 都被 96-98% 正確認為 part → **head 1 沒問題**
-- **Head 2 (defect/normal, 獨立評估)**：
-  - bend_light/heavy 只有 3-5% 被認為 defect ← **head 2 完全看不到**
-  - displace 95%/81% ← 強
-  - remesh 33%/54% ← 中等
-
-→ Bend 失敗 **100% 源自 head 2 看不到 visual signal**，不是 head 1 漏 part，也不是模型容量。
-
-### 1.3 兩個 root cause 推論
-
-| Root cause | 證據 | Stage 4 對策 |
-|------------|------|--------------|
-| **A. Bend axis 隨機選 X/Y 導致 50% 樣本「彎進畫面」** | `render_pan_head.py` L143 `rng.choice(["X","Y"])`。沒考慮相機 az。 | Bend axis 跟相機 az 對齊（±30° jitter），讓 bend 弧落在垂直視線方向 |
-| **B. Binary defect head 把 light/heavy/3 種 type 全部塞進 1 個 sigmoid 輸出**，weak signal 被強 signal 主導 | F2 數字 + 訓練 loss 行為 | 改 multi-head 監督（state + type）|
-
-### 1.4 額外發現的 bug
-
-- **HDRI 數量**：`render_pan_head.py` 寫死 2 個 HDRI（`university_workshop`、`crossfit_gym`），但 `assets/hdri/` 實際有 4 個 EXR（多了 `monochrome_studio_02`、`pretoria_gardens`）。Stage 4 修正 → 用全部 4 個。
-- **Scene 內 HDRI 不一致**：parts 階段每張用單一 HDRI 渲染，composite 階段隨機抽 parts → 同一 scene 內不同 instance 來自不同 HDRI 的反射，物理上不合理。Stage 4 修正 → 同 scene 只從同一 HDRI 的 part subset 抽。
+> 重寫：2026-05-28
+> 前情：[stage3_results.md](stage3_results.md)
+> 立場：只做有獨立理由的改動。不預先承諾「修 bend 的方法」，先把已知 bug 修完看數字怎麼動，再決定後續。
 
 ---
 
-## 2. ✅ 定案內容（已確定的設計）
+## 1. 從 Stage 3 數字獨立讀出的事實
 
-### 2.1 Architecture — Multi-head V4 (A + B + C + E)
+| 指標 | 值 | 判讀 |
+|------|---:|------|
+| Test mIoU | 0.712 | 主架構 / loss / 資料量都 OK |
+| normal_part IoU | 0.790 | 模型認得零件 |
+| bg IoU | 0.983 | 背景沒問題 |
+| 黑底 ablation defect IoU | 0.319 (vs 0.362) | DR 成功，模型沒靠背景 shortcut |
+| displace_h / displace_l | 0.428 / 0.391 | 已 saturate |
+| remesh_h / remesh_l | 0.276 / 0.155 | 中等 |
+| **bend_h / bend_l** | **0.024 / 0.006** | **失敗 — 預測為 defect 率僅 3-5%，遠低於 base rate ~50%** |
 
-| Head | Output 維度 | Label space | Loss | 推論用途 |
-|------|------------|-------------|------|---------|
-| **A** part/bg | 2-way softmax | bg / part | CE | gate（loss 限制 part 像素）+ 報告 |
-| **B** defect_state | **7-way softmax** | normal / bend_l / bend_h / disp_l / disp_h / remesh_l / remesh_h | CE + multi-class Dice | 細粒度 confusion matrix、報告主賣點 |
-| **C** defect_type | **4-way softmax** | none / bend / disp / remesh | CE + Dice | 工廠 QC 想知道哪類瑕疵 |
-| **E** binary defect | 1, sigmoid | normal / defect | BCE + Dice | 主 KPI（跟 Stage 3 比較）|
+**核心觀察**：三種 defect 的 IoU 排序 = 各自影響到的像素數量排序（displace 整面 > remesh 邊緣 > bend 剪影）。模型沒挑食，它就是學它看得到的東西。
 
-- **砍掉 D severity** — light/heavy 是 per-instance label，pixel-level 強硬 broadcast 後 noise 大，不適合 pixel-level head
-- **共用 encoder-decoder**，只在最後一層分歧出 4 個 head（4 個 1×1 conv）
-- 額外參數成本：(2+7+4+1) × c/2 channels ≈ 多幾百 params 而已
+**Bend 的失敗模式**是「從不預測 defect」，不是「搞混了」。
 
-### 2.2 Loss — 先用 weighted sum
+---
 
-```
-L_total = L_A + α_B (L_B_CE + L_B_Dice) + α_C (L_C_CE + L_C_Dice) + α_E (L_E_BCE + L_E_Dice)
-```
+## 2. 已知的兩個 bug（Harrison 在 Stage 3 後抓到）
 
-- α_B = α_C = α_E = 1.0 開始試
-- **Uncertainty Weighting (Kendall 2018) 已記錄但不在 Stage 4 採用**，留待後續優化（見 §4 延後項）
-- B/C/E 的 loss 都 gate 在 head A 預測為 part 的像素（或 GT part，看實作）
+### Bug 1：Bend axis 跟相機 az 無關
 
-### 2.3 Bend axis 修正
-
-**現況**：`m.deform_axis = rng.choice(["X", "Y"])` — 完全隨機，跟 camera az 無關 → 50% 機率 bend 彎進畫面看不見。
-
-**Stage 4 改動**：
-1. 給定相機 az（rad），算出「理想 bend 軸」= 垂直視線方向
-2. 允許 **±30° jitter**（你的決定：不要強制必定垂直，但不超過 30° 偏離）
-3. 因為 Blender SIMPLE_DEFORM 的 `deform_axis` 只接受離散 X/Y/Z，要做任意角度的彎曲需要用 **Empty 物件當 modifier `origin`** + 旋轉 Empty 的 Z 軸來指定 bend 方向
-
-實作雛形：
+`render_pan_head.py` L143：
 ```python
-# 給定 camera az (rad)
-ideal_bend_dir = az + math.pi/2     # 弧垂直視線
+m.deform_axis = rng.choice(["X", "Y"])
+```
+
+完全隨機選 X 或 Y。當 bend 軸恰好沿視線方向時，螺絲是「彎進畫面」，silhouette 從相機角度看不到差異。
+
+**後果**：bend 訓練樣本約有 50% 視覺上等同 normal → 等於 **data quality 50% 折扣**。
+
+### Bug 2：HDRI 寫死 2 個 + scene 內 HDRI 不一致
+
+- `render_pan_head.py` L35 寫死 `["university_workshop_4k.exr", "crossfit_gym_4k.exr"]`，但 `assets/hdri/` 實際有 4 個（多 `monochrome_studio_02_4k.exr`、`pretoria_gardens_4k.exr`）
+- `composite.py` 隨機抽 parts → 同 scene 不同 instance 來自不同 HDRI 渲染 → 反射物理上不一致
+
+---
+
+## 3. Stage 4 三件事（彼此獨立，不互相聲稱因果）
+
+### 3.1 修 Bug 1 — Bend axis 對齊相機
+
+**目標**：讓 bend 弧落在垂直視線方向，silhouette 變化最大化。
+
+**實作**：因為 Blender SIMPLE_DEFORM 的 `deform_axis` 只接受 X/Y/Z，要做任意角度需用 Empty 物件當 modifier `origin`：
+
+```python
+ideal_bend_dir = az + math.pi/2          # 弧垂直視線
 jitter = math.radians(rng.uniform(-30, 30))
 actual_bend_dir = ideal_bend_dir + jitter
 
-# 建立或重用 Empty，旋轉到 actual_bend_dir
-bend_empty = bpy.data.objects.get("BendOrigin") or bpy.data.objects.new("BendOrigin", None)
+bend_empty = bpy.data.objects.get("BendOrigin") or \
+             bpy.data.objects.new("BendOrigin", None)
 bend_empty.rotation_euler = (0, 0, actual_bend_dir)
 bend_empty.hide_render = True
 
 m = obj.modifiers.new("DefectBend", "SIMPLE_DEFORM")
 m.deform_method = "BEND"
-m.origin = bend_empty            # 用 Empty 的座標系
-m.deform_axis = "Z"              # 沿 Empty 的 Z 軸彎
+m.origin = bend_empty
+m.deform_axis = "Z"
 m.angle = math.radians(angle_deg)
 ```
 
-### 2.4 Remesh 強度重定
+**±30° jitter** 是 Harrison 的決定：不強制必定垂直，但偏離有限。
 
-**現況**：
-- `remesh_light`：octree_depth ∈ `REMESH_LIGHT_OCTREE_RANGE`（要查確切值，推測較高 depth ≈ 細）
-- `remesh_heavy`：octree_depth ∈ `REMESH_HEAVY_OCTREE_RANGE`（推測較低）
+**驗證步驟（先做）**：寫 `scripts/check_bend_axis.py`，render 4-6 顆 bend pan_head 用上述邏輯，PNG 輸出讓 Harrison 目視確認幾何對了，**再**正式改 `render_pan_head.py`。
 
-**Stage 4 改動**：
-- 新 `remesh_light` = 舊 `remesh_heavy` 強度（保留有用的等級）
-- 新 `remesh_heavy` = 再降一級 octree_depth（更激進），實際數字看 preview 後決定（討論項 §3）
+### 3.2 修 Bug 2 — HDRI 補回 4 個 + Scene 一致性
 
-### 2.5 HDRI 補回 4 個 + Scene 一致性
+- `render_pan_head.py` 的 `HDRIS` 改成 4 個檔名
+- `composite.py`：每個 scene 開頭 sample 一個 hdri，後續 instance 只從 `parts_meta` 中該 hdri 的 subset 抽
 
-- `render_pan_head.py` L35：`HDRIS = ["university_workshop_4k.exr", "crossfit_gym_4k.exr", "monochrome_studio_02_4k.exr", "pretoria_gardens_4k.exr"]`
-- `composite.py`：每張 scene 開頭 sample 一個 hdri 名稱，後續 instance 只從 `parts_meta` 中該 hdri 的 subset 抽
+### 3.3 架構升級 — A + B(7-way) + C(4-way) 三頭
 
-### 2.6 解析度維持 256
+**動機**：跟 bend 無因果關係。理由是 Harrison 的細粒度監督直覺 — 「給模型更多細節 label，讓它學更好的 representation」，這在 multi-task learning 裡是 auxiliary supervision 的標準做法。
 
-Bend 是 macro silhouette 問題、非 pixel 細節問題。提升到 384 對 bend 沒幫助，浪費算力。**維持 256**。
+| Head | Output | Label space | Loss | 角色 |
+|------|--------|-------------|------|------|
+| **A** part/bg | 2-way softmax | bg / part | CE | gate + 報告主指標 |
+| **B** defect_state | **7-way softmax** | normal / bend_l / bend_h / disp_l / disp_h / remesh_l / remesh_h | CE + multi-class Dice | 細粒度監督，報告 confusion matrix |
+| **C** defect_type | **4-way softmax** | none / bend / disp / remesh | CE + multi-class Dice | 中介層級監督，幫 encoder 學「類別」這層抽象 |
 
-### 2.7 不做的事項（已明確否決）
+**設計決策**：
+- **保留 C（4-way）作為 auxiliary head**：資訊上 C 是 B 的 collapse、推論時可從 B 推得，但獨立監督等於給 encoder 一個比 B 容易學的中介信號，**可能幫早期收斂與 representation 學習**。代價只是多一個 1×1 conv
+- **砍 binary defect head / severity head**：binary 從 argmax(B) 推、severity 不適合 pixel-level 強行 broadcast
+- **B 是 7-way 而非 4-way**：按 Harrison 邏輯，l/h 是獨立視覺類別（不是把 severity 當跨類軸），給模型最完整的 label
+- **GT gate**：B 和 C 的 loss 只在 GT part 像素上算（不是 pred part，避免 head A 早期不穩 propagate）
+- **共用 encoder-decoder**：只在最後分歧出 3 個 1×1 conv
+- **不加 hierarchical consistency loss**（強制 collapse(B)==C）：先看 baseline，如果 B/C 預測常不一致再考慮
 
-- ❌ Bend 角度拉到 60°（先改 axis 修正足夠）
-- ❌ 零件 tilt 額外軸（self-roll 跟 az 對 pan_head 等價，無意義）
-- ❌ HDRI 旋轉 augmentation
-- ❌ Cycles 渲染（太慢）
-- ❌ Localized defect mask（要動 Blender shader / vertex weight，留 future ideas）
-- ❌ Image-level aux head（光照/角度）— scene-level label 對 segmentation 邊際效益低
-- ❌ Severity head（per-instance label 不適合 pixel-level）
+**Loss**：
+```
+L_total = L_A_CE + α_B (L_B_CE + L_B_Dice) + α_C (L_C_CE + L_C_Dice)
+```
+α_B = α_C = 1.0 起步。Dice 在 multi-class 用 macro per-class Dice 平均（每類算一次再平均，minority 也有 voice）。
 
----
-
-## 3. 🟡 討論中 / 待確認
-
-> 這些項目 Harrison 想跟另一位助手討論後再定。
-
-### 3.1 Head A/B/C/E 的 loss 細節
-
-- α_B / α_C / α_E 起始值都 1.0 合理嗎？要不要 B 高、C 低（因為 B 已涵蓋 C 的資訊）？
-- B/C/E 都該 gate 在 GT part 像素上？還是 head A 預測 part 像素上（後者讓 head A 錯誤會 propagate）？
-- Dice 在 multi-class 怎麼算（per-class Dice 平均、generalized Dice、還是 macro Dice）？
-- 是否加 **hierarchical consistency loss**（head B argmax collapse 到 type 應該 = head C argmax；不一致加 penalty）？實作不難，但 paper 引用稍弱。
-
-### 3.2 Bend pose 是否也限縮 elevation
-
-- Azimuth 修正已經是主要解法（§2.3）
-- Elevation ±60° 仍會壓縮投影看不見 bend → 要不要在 bend instance 額外限縮 `|el| ≤ 30`？
-- 保險起見可做，代價是 bend 樣本減少（從 6 個 el → 4 個 el = -33%）
-
-### 3.3 新 remesh_heavy 的具體 octree_depth
-
-- 要先 preview 幾個值看視覺差異再定
-- 候選：octree_depth = {3, 2}（越小越粗糙；目前舊 heavy 推測是 4）
-- Plan：先 render 3-4 張不同 depth 的 sample，挑「比舊 heavy 更明顯但還能看出零件」的那個
-
-### 3.4 總部件數量規劃
-
-- 原本 252 part = 6 el × 3 az × 2 hdri × 7 state
-- Stage 4 拆解：
-  - HDRI 2 → 4（×2 倍）
-  - Azimuth 3 → ? （討論：3 維持？6 加密？因為 bend 已綁定 az，az 多樣性會直接影響 bend 多樣性）
-  - Bend elevation 若限縮 → bend state 的 part 比其他少
-- 預估範圍：**400 – 600 parts**
-- 渲染時間：Stage 3 跑 252 張花約 5-7 分鐘，500 張預估 10-15 分鐘 OK
-
-### 3.5 是否做小規模圖像級增強（defect ratio / focal / HDRI strength）
-
-- 先前提的 brainstorm 被否決，但需確認**全砍**還是有選項保留
-- Defect ratio 從 19.4% → 30% 是純改 composite 的常數，幾乎無代價
-- Focal length、HDRI strength 加變化需要小改 render script
-
-### 3.6 新資料集規模
-
-- Stage 3 是 1000 scenes。Stage 4 維持？還是 1500？
-- 若 head 增加但資料量不變，可能過擬合風險變高
-
-### 3.7 報告角度的 framing
-
-- Stage 4 故事線：「Stage 3 用拆 head F1/F2 診斷出 bend 失敗是 head 2 signal 問題 + bend axis bug → Stage 4 修 axis + 引入 multi-head 監督利用既有細粒度 label」
-- 重點：診斷導向設計，不是盲改
+**推論時**：
+- Binary defect mask = `argmax(B) != normal`（主 KPI、跟 Stage 3 比較）
+- Defect type 報告：可選 C 直接輸出 或 collapse(B)；兩者比對也是有趣的分析項
 
 ---
 
-## 4. 📝 已記錄但暫不採用的點子（往後優化）
+## 4. 不做的事
 
-### 4.1 Uncertainty Weighting (Kendall et al. 2018, CVPR)
-
-> *Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics*
-
-每個 task 學 trainable `log σᵢ²`，loss = `Σᵢ exp(-log_var_i) * L_i + 0.5 * log_var_i`。
-- 自動 balance，不用手調 weight
-- 3 行 code、每 head 多 1 個 scalar
-- Stage 4 先用 weighted sum（α=1），跑通了之後可作為 Stage 5 升級項
-
-### 4.2 Hierarchical / Consistency Loss
-
-- B 的 7-class argmax collapse 到 4-class type，應該 = C 的 4-class argmax
-- 不一致加 KL divergence penalty
-- 是 §3.1 的延伸，先看 baseline 表現再決定
-
-### 4.3 Localized defect mask（per-pixel 瑕疵位置）
-
-- 目前 defect label = 整顆瑕疵零件 alpha（bend 的螺絲頭也被標 defect → noise）
-- 改用 Blender Material Index pass 或 vertex weight 輸出真正彎曲區域
-- 對 bend 影響可能比換 head 還大，但工作量大，留 Stage 5+
-
-### 4.4 GradNorm / PCGrad
-
-- 比 Uncertainty Weighting 複雜
-- 報告講起來不漂亮
-- 若 Uncertainty Weighting 也不夠才考慮
-
-### 4.5 Domain Adversarial Training（光照不變性）
-
-- 從 bottleneck 加 GRL + HDRI classifier，強迫 encoder 丟掉光照資訊
-- DR 已經一定程度做到了，邊際效益不確定
+| 項目 | 理由 |
+|------|------|
+| Bend angle 拉到 60°+ | 假設「修 axis 不夠」才需要，先看數字 |
+| Camera focal / 距離 | 同上 |
+| Bend instance elevation 限縮 | 同上，且修 axis 後 elevation 60° 看下去 bend 弧 cos(60°)=0.5 仍可見 |
+| 解析度 384 | 已駁回，bend 是 macro 問題不是 pixel 細節問題 |
+| Severity / type 獨立 head | 7-way B 已含全部資訊 |
+| Uncertainty Weighting / GradNorm / PCGrad | 報告講不漂亮，先 weighted sum α=1 跑通 |
+| Localized defect mask | 要動 Blender shader，工程量大，留 Stage 5+ |
+| Image-level aux head | scene-level label 對 segmentation 邊際效益低 |
 
 ---
 
-## 5. 預計工作流程（待 §3 全部敲定後執行）
+## 5. Phase 化執行 — 跑完再決定
 
-1. **修 `render_pan_head.py`**：HDRI 補 4 個、bend axis 改 Empty-based + ±30° jitter、remesh 強度重定
-2. **重新渲 parts**（~500 張，10-15 min）
-3. **修 `composite.py`**：同 scene HDRI 一致性、defect ratio（如改）、可選的 focal/HDRI strength augment
-4. **重 composite 1000–1500 scenes**（~3-5 min）
-5. **黑底 ablation 重生**（100 scenes）
-6. **改 `train_stage3.py` → `train_stage4.py`**：4-head model、新 loss、early stop / ReduceLROnPlateau
-7. **訓練**（30 epoch，~7-10 min）
-8. **改 `eval_stage3.py` → `eval_stage4.py`**：4-head 對應的 8-10 張新圖
-9. **寫 `stage4_results.md` + 更新 HTML 報告**
-10. **同步上傳 Drive**
+### Phase 1（必做 — 兩個 bug fix + multi-head）
+
+1. 寫 `scripts/check_bend_axis.py` 渲 sanity 圖
+2. Harrison 確認幾何 → 改 `render_pan_head.py`（bend axis + HDRI 4 個）
+3. 改 `composite.py`（scene HDRI 一致性）
+4. 重 render parts（數量同 Stage 3 量級，~250–500 張）
+5. 重 composite 1000 scenes
+6. 黑底 ablation 重生 100 scenes
+7. 改 `train_stage3.py` → `train_stage4.py`，加 7-way B head + 4-way C head
+8. 訓練 + eval
+
+### Phase 1 完成後的 **Decision Point**
+
+看 `bend_l` / `bend_h` 的 per-state IoU：
+
+| Bend IoU 結果 | 行動 |
+|---------------|------|
+| **> 0.15** | Phase 2 結案，寫報告 |
+| **0.05–0.15** | 加碼一項視覺強化（候選：angle 拉強 / elevation 限縮 / focal 拉長），單一變因再跑一次 |
+| **< 0.05** | 重新評估 bend 是否該留在 defect set，或承認在 256px 下不可解、報告誠實標註 |
+
+**重點**：這個 decision point 是「拿到數字才決定」，不是「先決定下一步」。
+
+### Phase 2（可選 — Phase 1 結果不佳才觸發）
+
+留空。等數字。
 
 ---
 
-## 6. 給組員的速覽
+## 6. 預期結果（誠實預測）
 
-- **背景**：Stage 3 兩頭模型把 defect IoU 從 0.004 拉到 0.362，但 bend 仍是 0.01-0.02。診斷出兩個 root cause（bend axis bug + binary head 標籤利用率低）。
-- **Stage 4 動作**：4-head 監督（part/bg + state + type + binary）+ 修 bend axis 對齊相機 + HDRI 補完整。
-- **不動的**：模型架構主體（共用 encoder-decoder）、解析度（256）、訓練 pipeline 大致同 Stage 3。
-- **可討論的**：上面 §3 七項。
+- normal / bg / displace：跟 Stage 3 持平或略升（multi-head 邊際 regularization）
+- remesh：可能小幅改善（7-way 細粒度監督幫助）
+- **bend**：axis 修對後從 0.02 拉到 **大約 0.05–0.15** 區間
+  - 理由：effective 訓練資料量翻倍（50% 廢樣本變有效），但每樣本的 silhouette 偏移在 256px 下還是只有幾 px
+  - 如果落在 > 0.15，是上限好的情況
+  - 如果 < 0.05，axis fix 不足以解，要進 Phase 2
+
+整體 defect IoU：**0.38–0.45** 區間，不會炸性提升。
+
+---
+
+## 7. 給組員的速覽
+
+獨立 HTML 版（仿 `docs/stage3_report.html` 格式），訓練 / eval 跑完後再生成。
+Plan 階段不放速覽。

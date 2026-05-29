@@ -149,3 +149,39 @@
 **Blender MCP（可選）**：
 - 安裝 blender-mcp addon 後，Claude Desktop 可直接操控 Blender 場景
 - 適合設定場景、調材質、除錯用，不作為批量渲染的核心依賴
+
+---
+
+## Stage 4 — Multi-head 廢、single-head 留
+
+**決定：採 Stage 3 single-head 架構 + Stage 4 新資料當最終 best；multi-head 進 ablation**
+
+- Multi-head V4 (A part/bg 2 + B state 7 + C type 4) 跑出 defect IoU 0.342，比 single-head 0.385 差
+- Loss 分解：L_A 只佔總 loss 3%，aux head (B+C) 主導梯度 → 主任務「part vs bg + defect vs normal」被邊緣化
+- 沒做 loss balancing 直接 sum α=1.0 是錯的；Stage 4 plan 把這當 baseline 結果壞掉
+- **Stage 5 救活方向**：(a) α_B = α_C = 0.1~0.3、(b) Uncertainty Weighting (Kendall 2018)、(c) 砍 binary head 純用 7-way B argmax collapse — (c) 最乾淨
+
+**決定：B head 用 7-way 而非 4-way**
+
+- 跟 Harrison 立場一致：l/h 是獨立視覺類別，不把 severity 當跨類軸
+- 這 Stage 4 沒救活 multi-head，但 7-way 設計本身在 Stage 5 救活方案 (c) 可重用
+
+**決定：不放 severity head**
+
+- per-instance label 強行 broadcast 到 per-pixel 引入 noise
+- 7-way B 已隱含 severity 區分（bend_l vs bend_h 是不同 class）
+
+## Stage 4 — Bend 方向加隨機 ±
+
+**決定：Bend angle 加 `rng.choice([-1, +1])` 50/50 翻轉**
+
+- 不翻轉時所有 bend 樣本往同一側 → 模型可能學 shortcut「bend = 往某方向歪」而非「bend = silhouette 變化」
+- 在 part render 階段決定，比 composite 階段翻轉乾淨（後者會連帶翻 HDRI 反射 / bg）
+
+## Stage 4 — 結案不進 Phase 2
+
+**決定：bend IoU 落 0.05-0.15 grey zone（plan 規定應加碼），但 Stage 4 結案**
+
+- 實際 bend_l=0.062, bend_h=0.079
+- 結案理由：(1) 報告期限剩 5 天 (2) 現有 defect IoU 0.385 已超 Stage 3 故事完整 (3) Displace 退步是更值得追的問題
+- Phase 2 候選（elevation 限縮 / focal 拉長 / 60° angle）全部記到 future_ideas.md Stage 5 候選

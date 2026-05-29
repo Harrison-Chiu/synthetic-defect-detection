@@ -1,5 +1,5 @@
 """
-Stage 2/3 — Scene composite
+Stage 2/3/4 — Scene composite
 
 從 output/parts_stage2/ 取單零件 PNG（含 alpha），隨機 rotate/scale 後貼到背景上組合場景。
 合成過程同時產生 ground truth：semantic mask（背景/正常/瑕疵）+ instance mask + meta.json。
@@ -10,12 +10,18 @@ Stage 3 升級：
   - 程序化 distractors（幾何圖案，非均勻數量分布）— 模擬工廠雜物，避免 stationary-texture shortcut
   - 詳見 docs/stage3_plan.md「背景配方」段
 
+Stage 4 升級：
+  - 每 scene 開頭 sample 一個 HDRI index，所有 instance 只從該 HDRI 渲染的 part subset 抽
+    （修正 Stage 3 物理不一致 bug：同 scene 不同 instance 來自不同 HDRI 反射）
+  - parts 檔名格式 `pan_head_az###_el±###_h#_<state>.png`，解析 h# 取 HDRI index
+
 執行：
     conda activate dl_final
     python scripts/composite.py
 """
 
 import os
+import re
 import math
 import json
 import glob
@@ -104,17 +110,32 @@ BG_AUG_FLIP_V_PROB = 0.5
 # 載入素材
 # ─────────────────────────────────────────────
 
-def load_part_index():
-    """掃 parts_stage2/，分成 normal / defective 兩個 pool。回傳 (normal_list, defect_list)"""
-    normal_pool, defect_pool = [], []
+_HDRI_RE = re.compile(r"_h(\d+)_")
+
+def _hdri_idx_from_filename(path):
+    m = _HDRI_RE.search(os.path.basename(path))
+    if m is None:
+        raise ValueError(f"Cannot parse hdri index from filename: {path}")
+    return int(m.group(1))
+
+
+def load_part_index_by_hdri():
+    """掃 parts_stage2/，按 hdri_idx 分桶。
+    回傳 dict: {hdri_idx: {"normal": [...], "defect": [...]}}
+    每 pool 為 list of (path, defect_state)。
+    """
+    buckets = {}
     for state_dir in sorted(os.listdir(PARTS_DIR)):
         full = os.path.join(PARTS_DIR, state_dir)
         if not os.path.isdir(full):
             continue
-        target = defect_pool if state_dir in DEFECT_STATES_DEFECTIVE else normal_pool
+        key = "defect" if state_dir in DEFECT_STATES_DEFECTIVE else "normal"
         for png in sorted(glob.glob(os.path.join(full, "*.png"))):
-            target.append((png, state_dir))
-    return normal_pool, defect_pool
+            h = _hdri_idx_from_filename(png)
+            if h not in buckets:
+                buckets[h] = {"normal": [], "defect": []}
+            buckets[h][key].append((png, state_dir))
+    return buckets
 
 
 def sample_parts(n, normal_pool, defect_pool, rng):
@@ -286,8 +307,14 @@ def alpha_bbox(alpha, threshold=10):
     return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
 
 
-def composite_scene(scene_idx, normal_pool, defect_pool, bg_pools, rng):
-    """產生一張 scene。Stage 3：base layer 三選一 + bg aug + 程序化 distractors"""
+def composite_scene(scene_idx, part_buckets, bg_pools, rng):
+    """產生一張 scene。Stage 4：先抽 HDRI subset，instance 只從該 subset 抽（同 scene 反射物理一致）"""
+    # 0) Stage 4：先抽 HDRI subset
+    hdri_keys = sorted(part_buckets.keys())
+    hdri_idx = hdri_keys[rng.randint(len(hdri_keys))]
+    normal_pool = part_buckets[hdri_idx]["normal"]
+    defect_pool = part_buckets[hdri_idx]["defect"]
+
     # 1) 抽 base layer
     bg_pil, base_kind, base_source = generate_base_layer(bg_pools, rng)
     bg_pil = augment_background(bg_pil, rng)
@@ -377,6 +404,7 @@ def composite_scene(scene_idx, normal_pool, defect_pool, bg_pools, rng):
     Image.fromarray(instance).save(os.path.join(scene_dir, "instance_mask.png"))
     meta = {
         "scene_id":      scene_idx,
+        "hdri_idx":      int(hdri_idx),    # Stage 4：scene HDRI 一致性
         "bg_kind":       base_kind,       # real / procedural / solid
         "bg_source":     base_source,
         "bg_crop":       [int(x0), int(y0)],
@@ -392,9 +420,11 @@ def composite_scene(scene_idx, normal_pool, defect_pool, bg_pools, rng):
 
 def main():
     rng = np.random.RandomState(SEED)
-    normal_pool, defect_pool = load_part_index()
+    part_buckets = load_part_index_by_hdri()
     bg_pools = load_background_pools()
-    print(f"Loaded {len(normal_pool)} normal + {len(defect_pool)} defect parts")
+    for h in sorted(part_buckets.keys()):
+        print(f"  HDRI {h}: {len(part_buckets[h]['normal'])} normal + "
+              f"{len(part_buckets[h]['defect'])} defect")
     print(f"Background pools: real={len(bg_pools['real'])}, procedural={len(bg_pools['procedural'])}, "
           f"+ solid (procedural in-script)")
     print(f"DEFECT_PROB={DEFECT_PROB}, base layer probs={BASE_LAYER_PROBS}, "
@@ -402,13 +432,14 @@ def main():
     os.makedirs(SCENES_DIR, exist_ok=True)
 
     for i in range(N_SCENES):
-        composite_scene(i, normal_pool, defect_pool, bg_pools, rng)
+        composite_scene(i, part_buckets, bg_pools, rng)
         if (i + 1) % 100 == 0:
             print(f"  [{i+1}/{N_SCENES}] scenes done")
 
     # 統計實際分布
     n_total, n_def, n_def_scenes = 0, 0, 0
     bg_kind_count = {"real": 0, "procedural": 0, "solid": 0}
+    hdri_count = {}
     distractor_total = 0
     for sid in range(N_SCENES):
         mp = os.path.join(SCENES_DIR, f"{sid:05d}", "meta.json")
@@ -417,11 +448,14 @@ def main():
         if m["n_defective"] > 0:
             n_def_scenes += 1
         bg_kind_count[m.get("bg_kind", "real")] += 1
+        h = m.get("hdri_idx", -1)
+        hdri_count[h] = hdri_count.get(h, 0) + 1
         distractor_total += m.get("n_distractors", 0)
     print(f"\nDone. {N_SCENES} scenes → {SCENES_DIR}")
     print(f"Defect ratio: {n_def}/{n_total} instances defective ({n_def/n_total*100:.1f}%); "
           f"{n_def_scenes}/{N_SCENES} scenes contain >=1 defect ({n_def_scenes/N_SCENES*100:.1f}%)")
     print(f"Base layer distribution: {bg_kind_count}")
+    print(f"HDRI distribution: {dict(sorted(hdri_count.items()))}")
     print(f"Avg distractors/scene: {distractor_total/N_SCENES:.2f}")
 
 

@@ -1,8 +1,15 @@
 """
-Stage 2 — pan_head 單零件渲染（含 Bend / Displace 瑕疵變體）
+Stage 4 — pan_head 單零件渲染（含 Bend / Displace / Remesh 瑕疵變體）
 
-每 (elevation, azimuth, HDRI, defect_state) 組合渲一張，總 6×3×2×5 = 180 張。
+每 (elevation, azimuth, HDRI, defect_state) 組合渲一張，總 6×3×4×7 = 504 張。
 所有 defect 參數透過 deterministic seed 隨機化，整體可復現。
+
+Stage 4 改動：
+  - Bend: axis 對齊相機 (旋轉 pan_head 自身 α=az+jitter 度繞 Z，deform_axis=X)
+          + 隨機 ±方向 (避免模型學 shortcut)
+          + ±30° jitter
+  - HDRI: 補回 4 個 (Stage 3 寫死 2 個是 bug)
+  - Remesh: LIGHT 永遠 octree=5, HEAVY 永遠 octree=4 (Stage 3 太弱)
 
 執行方式：
     1) Blender Script Editor 開啟此檔，按 ▶ Run Script
@@ -32,7 +39,12 @@ PART = "pan_head"
 
 ELEVATIONS = [-60, -30, -10, 10, 30, 60]   # 6 個，含仰視
 AZIMUTHS   = [0, 120, 240]                  # 3 個
-HDRIS      = ["university_workshop_4k.exr", "crossfit_gym_4k.exr"]  # 2 個
+HDRIS      = [
+    "university_workshop_4k.exr",
+    "crossfit_gym_4k.exr",
+    "monochrome_studio_02_4k.exr",
+    "pretoria_gardens_4k.exr",
+]  # 4 個（Stage 3 寫死 2 個是 bug）
 # Stage 3：新增 remesh_light / remesh_heavy 取代 Bevel（Bevel 視覺幾乎無效）
 DEFECT_STATES = [
     "normal",
@@ -48,9 +60,13 @@ BEND_HEAVY_RANGE     = (25, 45)
 DISPLACE_LIGHT_RANGE = (0.15, 0.30)    # OBJECT LOCAL units, NOT world meters
 DISPLACE_HEAVY_RANGE = (0.40, 0.80)
 # Remesh Sharp：voxel 化造成「塊狀破損」感。octree_depth 越小越破碎
-REMESH_LIGHT_OCTREE_RANGE = (7, 8)     # 表面變粗糙、輕微多邊形化
-REMESH_HEAVY_OCTREE_RANGE = (5, 6)     # 明顯塊狀破損
+# Stage 4：sanity check 確認 7-8 視覺幾乎 = normal，5/4 才有 defect signal
+REMESH_LIGHT_OCTREE_RANGE = (5, 5)     # 永遠 5 — 明顯塊狀但仍辨識
+REMESH_HEAVY_OCTREE_RANGE = (4, 4)     # 永遠 4 — 重度破碎
 REMESH_SCALE              = 0.99       # 0.99 接近原大小，1.0 會跟 boundary 同步
+
+# Bend axis jitter（Stage 4）— 偏離理想 axis 角度範圍
+BEND_AXIS_JITTER_DEG_RANGE = (-30, 30)
 # 重要：Displace strength 是物件 local space 單位，不是世界 meter
 # 我們零件 scale=0.001，local 1 unit = 1mm 世界，所以這裡 0.1 ≈ 0.1mm 世界 displacement
 # pan_head 原始 3614 頂點已足夠 displace，不需 Subsurf
@@ -130,9 +146,15 @@ def get_or_create_clouds_texture(name="DefectCloudsTex", noise_scale=0.5):
     return tex
 
 
-def apply_defect(obj, defect_state, rng):
-    """套用 defect modifier，回傳 param dict（供 metadata 記錄）"""
+def apply_defect(obj, defect_state, az_deg, rng):
+    """套用 defect modifier，回傳 param dict（供 metadata 記錄）
+
+    Stage 4：bend 改為旋轉 obj 對齊相機 az + ±30° jitter + 隨機 ±方向。
+            其他 defect state 確保 obj.rotation_euler = (0,0,0)。
+    """
     clear_defect_modifiers(obj)
+    # 預設重置旋轉；bend case 會 override
+    obj.rotation_euler = (0, 0, 0)
 
     if defect_state == "normal":
         return {}
@@ -140,12 +162,21 @@ def apply_defect(obj, defect_state, rng):
     if defect_state.startswith("bend"):
         rng_range = BEND_LIGHT_RANGE if defect_state == "bend_light" else BEND_HEAVY_RANGE
         angle_deg = rng.uniform(*rng_range)
-        axis      = rng.choice(["X", "Y"])
+        sign      = rng.choice([-1, 1])   # 隨機左右方向，避免 model 學 shortcut
+        jit_deg   = rng.uniform(*BEND_AXIS_JITTER_DEG_RANGE)
+        alpha_deg = az_deg + jit_deg      # pan_head Z-rotation 對齊相機
+        obj.rotation_euler = (0, 0, math.radians(alpha_deg))
+
         m = obj.modifiers.new("DefectBend", "SIMPLE_DEFORM")
         m.deform_method = "BEND"
-        m.deform_axis   = axis
-        m.angle         = math.radians(angle_deg)
-        return {"axis": axis, "angle_deg": round(angle_deg, 3)}
+        m.deform_axis   = "X"             # rotated local X = 沿相機視線方向 → bend 弧落 image plane
+        m.angle         = math.radians(angle_deg * sign)
+        return {
+            "angle_deg":      round(angle_deg, 3),
+            "sign":           int(sign),
+            "axis_jitter_deg": round(jit_deg, 3),
+            "obj_z_rot_deg": round(alpha_deg, 3),
+        }
 
     if defect_state.startswith("displace"):
         rng_range = DISPLACE_LIGHT_RANGE if defect_state == "displace_light" else DISPLACE_HEAVY_RANGE
@@ -201,7 +232,7 @@ def main():
                     # Deterministic seed for defect param randomization
                     seed = abs(hash((el, az, hdri_idx, defect_state))) & 0xFFFFFFFF
                     rng  = random.Random(seed)
-                    params = apply_defect(pan, defect_state, rng)
+                    params = apply_defect(pan, defect_state, az, rng)
 
                     fname = f"pan_head_az{az:03d}_el{el:+04d}_h{hdri_idx}_{defect_state}.png"
                     fpath = os.path.join(OUTPUT_DIR, defect_state, fname)
@@ -225,6 +256,7 @@ def main():
                         print(f"  [{idx}/{total}] {fname}")
 
     clear_defect_modifiers(pan)
+    pan.rotation_euler = (0, 0, 0)
 
     meta_path = os.path.join(OUTPUT_DIR, "parts_meta.json")
     with open(meta_path, "w", encoding="utf-8") as f:
