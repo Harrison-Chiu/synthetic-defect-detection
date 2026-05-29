@@ -17,7 +17,9 @@
 > 新版 `scene(i)=f(i,config)` per-i 確定性、當場生成、不存訓練圖。
 
 ## 尚未遷移(scripts/ 獨有,需要時再處理)
-- **報告產生**:`build_stage3_html.py` / `build_stage4_html.py` / `rework_figs_ef.py`(對應 cli `report`,待接)
+- **報告產生**:通用 run 報告已接 `cli.py report`(`src/eval/report.py`)。
+  `build_stage3_html.py` / `build_stage4_html.py` / `rework_figs_ef.py` 是**S4 專屬敘事報告**
+  (手工圖 + 寫死數字 + prose),性質不同,保留為一次性。
 - **舊 stage 訓練/評估**:`train_stage2_runner.py` / `train_stage3.py` / `eval_stage2.py` / `eval_stage3.py` / `eval_stage4_compare.py`
 - **素材/工具**:`download_ambientcg.py` / `preview_parts.py` / `preview_scenes.py` / `preview_bg_candidates.py` / `gen_black_bg_test.py`
 - **sanity 檢查**:`check_bend_axis.py` / `check_remesh_strength.py`(Blender 側一次性驗證)
