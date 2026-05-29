@@ -59,7 +59,8 @@ def build_report(run_dir: str | Path) -> Path:
         if (run_dir / "history.json").exists() else {}
 
     import torch
-    ckpt = torch.load(run_dir / "best.pt", map_location="cpu") if (run_dir / "best.pt").exists() else {}
+    ckpt = torch.load(run_dir / "best.pt", map_location="cpu", weights_only=False) \
+        if (run_dir / "best.pt").exists() else {}
     test = ckpt.get("test_metrics", {})
     per_state = ckpt.get("per_state_iou", [])
     train_cfg = ckpt.get("train_config", {})

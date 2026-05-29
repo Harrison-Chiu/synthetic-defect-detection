@@ -118,7 +118,7 @@ def cmd_eval(args):
     if not eval_dir.exists():
         sys.exit(f"找不到 eval set:{eval_dir}")
 
-    ckpt = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     base_c = ckpt.get("train_config", {}).get("base_c", 32)
     model = DefectSegNet(base_c=base_c).to(device)
     model.load_state_dict(ckpt["state_dict"])

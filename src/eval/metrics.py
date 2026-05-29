@@ -57,8 +57,8 @@ def evaluate_3class(model, loader, device, num_classes=3):
             union[c] += (p | t).sum().item()
         correct += (pred == gt).sum().item()
         total += gt.numel()
-    ious = [inter[c] / union[c] if union[c] > 0 else float("nan") for c in range(num_classes)]
-    return {"pixel_acc": correct / total, "mIoU": float(np.nanmean(ious)), "IoU_per_class": ious}
+    ious = [float(inter[c] / union[c]) if union[c] > 0 else float("nan") for c in range(num_classes)]
+    return {"pixel_acc": float(correct / total), "mIoU": float(np.nanmean(ious)), "IoU_per_class": ious}
 
 
 @torch.no_grad()
@@ -77,4 +77,4 @@ def evaluate_per_state(model, loader, device):
             t = state_gt == c
             inter[c] += (p & t).sum().item()
             union[c] += (p | t).sum().item()
-    return [inter[c] / union[c] if union[c] > 0 else float("nan") for c in range(_N_STATES)]
+    return [float(inter[c] / union[c]) if union[c] > 0 else float("nan") for c in range(_N_STATES)]
