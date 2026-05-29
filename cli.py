@@ -134,11 +134,31 @@ def cmd_eval(args):
         print(f"  {schema.STATE_CLASSES[c]:18s} IoU={iou:.3f}")
 
 
-# ── render-patches / report(尚未完全抽出,誠實標示)──────────
+# ── render(Blender 側,shell out)+ gen-backgrounds(純 conda)──
+def cmd_gen_backgrounds(args):
+    # 純 PIL/numpy/cv2,在 conda(dl_final)直接跑
+    from src.render.backgrounds import gen_backgrounds
+    n = gen_backgrounds(args.out, n_per_type=args.n_per_type)
+    print(f"產生 {n} 張程序背景 → {args.out}")
+
+
 def cmd_render_patches(args):
-    sys.exit("render/ 模組尚未從 scripts/ 抽出。\n"
-             "目前零件 patch 預渲仍走 scripts/render_stage1.py(Blender 側)。\n"
-             "待 Task #5 render/ 抽取完成後接上。")
+    # patch 預渲是 bpy 工作,conda 無 bpy → 以 background mode 叫起 Blender 跑 src/render/patches.py
+    import subprocess
+
+    blend = Path(args.blend)
+    if not blend.exists():
+        sys.exit(f"找不到 blend 檔:{blend}")
+    script = REPO_ROOT / "src" / "render" / "patches.py"
+    cmd = [args.blender, "--background", str(blend), "--python", str(script)]
+    print("執行:", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        sys.exit(f"找不到 Blender 執行檔 '{args.blender}'。\n"
+                 f"請用 --blender 指定路徑,或在 Blender Script Editor 直接跑 {script}")
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"Blender 渲染失敗(exit {e.returncode})")
 
 
 def cmd_report(args):
@@ -174,8 +194,15 @@ def build_parser():
     pv.add_argument("--device", default="auto")
     pv.set_defaults(func=cmd_eval)
 
-    pr = sub.add_parser("render-patches", help="零件 patch 預渲(Blender 側)")
+    pr = sub.add_parser("render-patches", help="零件 patch 預渲(background mode 叫起 Blender)")
+    pr.add_argument("--blender", default="blender", help="Blender 執行檔路徑")
+    pr.add_argument("--blend", default=str(REPO_ROOT / "blender" / "114-2_DLcourse_FinalProject-01.blend"))
     pr.set_defaults(func=cmd_render_patches)
+
+    pb = sub.add_parser("gen-backgrounds", help="程序化背景生成(純 conda)")
+    pb.add_argument("--out", default=str(REPO_ROOT / "assets" / "backgrounds"))
+    pb.add_argument("--n-per-type", type=int, default=3)
+    pb.set_defaults(func=cmd_gen_backgrounds)
 
     prep = sub.add_parser("report", help="產生 HTML 報告")
     prep.set_defaults(func=cmd_report)
