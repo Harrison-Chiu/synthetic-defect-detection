@@ -162,7 +162,12 @@ def cmd_render_patches(args):
 
 
 def cmd_report(args):
-    sys.exit("report 尚未接上 cli。暫用 scripts/build_stage4_html.py。")
+    from src.eval.report import build_report
+
+    run_dir = Path(args.runs) / args.tag
+    if not run_dir.exists():
+        sys.exit(f"找不到 run:{run_dir}")
+    build_report(run_dir)
 
 
 def build_parser():
@@ -204,7 +209,9 @@ def build_parser():
     pb.add_argument("--n-per-type", type=int, default=3)
     pb.set_defaults(func=cmd_gen_backgrounds)
 
-    prep = sub.add_parser("report", help="產生 HTML 報告")
+    prep = sub.add_parser("report", help="產生 run 的 HTML 報告(通用)")
+    prep.add_argument("--tag", required=True)
+    prep.add_argument("--runs", default=str(DEFAULT_RUNS))
     prep.set_defaults(func=cmd_report)
 
     return p
