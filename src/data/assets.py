@@ -5,8 +5,7 @@ assets.py — 生成器的素材載入(零件 patch 池 + 背景池)
 並去掉寫死的 BASE_DIR:路徑改由 repo root 推導 + 可覆寫。
 素材只載入一次(回傳輕量索引:檔案路徑清單),不在這裡讀圖。
 
-注意:目錄名 `output/parts_stage2` 是 Stage 4 現況;`整理規則 §3` 規劃正名為
-`output/patches/`,屆時(Task #8)只改下方 default,呼叫端不受影響。
+目錄名已正名為 `output/patches/`(原 `parts_stage2`,Task #8 完成)。
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from src.data.config import DEFECT_STATES_DEFECTIVE
 # repo root = 本檔的 .../src/data/assets.py 往上三層
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_PARTS_DIR = REPO_ROOT / "output" / "parts_stage2"
+DEFAULT_PARTS_DIR = REPO_ROOT / "output" / "patches"
 DEFAULT_BG_REAL_DIR = REPO_ROOT / "assets" / "backgrounds_real"
 DEFAULT_BG_PROC_DIR = REPO_ROOT / "assets" / "backgrounds_procedural"
 

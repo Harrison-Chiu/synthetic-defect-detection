@@ -5,7 +5,7 @@
 > 分工：Harrison 負責 Blender 合成資料集，另 2 位組員負責模型訓練
 >
 > **當前 active：`docs/active.md`** ｜ 歷史 stage：`docs/history/`
-> **⚠️ 專案結構重構進行中** — 目標結構/版控規則見 `docs/reference/整理規則.md`（路徑表以此為準遷移）
+> **結構重構已落地** — `src/` 分層 + runtime 生成 + `output/` 角色分類 + `cli.py` 入口。規則見 `docs/reference/整理規則.md`。
 
 ## 課程規則（成文，唯一來源 `docs/reference/course_requirements.md`）
 - 報告日 / 時長 / 繳交物 / 評分 一律以該檔為準，**不要自行腦補**。
@@ -38,9 +38,11 @@
 | Blend 檔 | `blender/114-2_DLcourse_FinalProject-01.blend` |
 | 3D 模型 | `assets/3d_model/<McMaster-Carr 完整檔名>.obj` |
 | HDRI（git 不追蹤） | `assets/hdri/<name>_4k.exr` |
-| 零件預渲 patch | `output/parts_stage2/{defect_state}/` |
-| 場景合成 | `output/scenes/{scene_id:05d}/` |
-| 模型 / log / history | `output/`（根，混放）|
+| 零件預渲 patch | `output/patches/{defect_state}/`（版控核心，Blender 預渲）|
+| 場景 | **runtime 生成**（`src/data`，不落地）；凍結 eval：`output/eval_set/`；配圖：`output/samples/` |
+| 訓練產出 | `output/runs/<stage_tag>/`（`best.pt` / `history.json` / `train.log` / `snapshots/`）|
+| 封存（舊 stage） | `output/archive/`（scenes、scenes_black、S1 dataset、舊 stage models）|
+| 程式碼 | `src/{schema,data,models,train,eval}/`；統一入口 `cli.py`；生成/訓練參數 `configs/` |
 
 ## 設計原則（持續遵守）
 1. **可復現性 > 採樣多樣性**：能用 pure 確定性（grid / `f(i,config)`）就不要 random+seed

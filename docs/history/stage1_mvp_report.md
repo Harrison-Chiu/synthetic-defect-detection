@@ -25,22 +25,22 @@
 ### Socket Head Cap Screw
 | el=-40° (仰視) | el=+40° (3/4 視角) | el=+70° (俯視) |
 |---|---|---|
-| ![](../output/dataset/raw/socket_head/socket_head_az000_el-040_h0.png) | ![](../output/dataset/raw/socket_head/socket_head_az000_el+040_h0.png) | ![](../output/dataset/raw/socket_head/socket_head_az000_el+070_h0.png) |
+| ![](../../output/archive/dataset/raw/socket_head/socket_head_az000_el-040_h0.png) | ![](../../output/archive/dataset/raw/socket_head/socket_head_az000_el+040_h0.png) | ![](../../output/archive/dataset/raw/socket_head/socket_head_az000_el+070_h0.png) |
 
 ### Pan Head Phillips Screw
 | el=-40° | el=+40° | el=+70° |
 |---|---|---|
-| ![](../output/dataset/raw/pan_head/pan_head_az000_el-040_h0.png) | ![](../output/dataset/raw/pan_head/pan_head_az000_el+040_h0.png) | ![](../output/dataset/raw/pan_head/pan_head_az000_el+070_h0.png) |
+| ![](../../output/archive/dataset/raw/pan_head/pan_head_az000_el-040_h0.png) | ![](../../output/archive/dataset/raw/pan_head/pan_head_az000_el+040_h0.png) | ![](../../output/archive/dataset/raw/pan_head/pan_head_az000_el+070_h0.png) |
 
 ### Hex Nut
 | el=-40° | el=+40° | el=+70° |
 |---|---|---|
-| ![](../output/dataset/raw/hex_nut/hex_nut_az000_el-040_h0.png) | ![](../output/dataset/raw/hex_nut/hex_nut_az000_el+040_h0.png) | ![](../output/dataset/raw/hex_nut/hex_nut_az000_el+070_h0.png) |
+| ![](../../output/archive/dataset/raw/hex_nut/hex_nut_az000_el-040_h0.png) | ![](../../output/archive/dataset/raw/hex_nut/hex_nut_az000_el+040_h0.png) | ![](../../output/archive/dataset/raw/hex_nut/hex_nut_az000_el+070_h0.png) |
 
 ### Flange Nut
 | el=-40° | el=+40° | el=+70° |
 |---|---|---|
-| ![](../output/dataset/raw/flange_nut/flange_nut_az000_el-040_h0.png) | ![](../output/dataset/raw/flange_nut/flange_nut_az000_el+040_h0.png) | ![](../output/dataset/raw/flange_nut/flange_nut_az000_el+070_h0.png) |
+| ![](../../output/archive/dataset/raw/flange_nut/flange_nut_az000_el-040_h0.png) | ![](../../output/archive/dataset/raw/flange_nut/flange_nut_az000_el+040_h0.png) | ![](../../output/archive/dataset/raw/flange_nut/flange_nut_az000_el+070_h0.png) |
 
 ---
 
