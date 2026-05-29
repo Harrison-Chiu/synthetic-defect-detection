@@ -3,7 +3,7 @@
 > 訓練：2026-05-27  
 > 計畫：[stage3_plan.md](stage3_plan.md)  
 > 對比：[stage2_baseline_results.md](stage2_baseline_results.md)  
-> 圖：[docs/figures/stage3/](figures/stage3/)
+> 圖：[docs/figures/stage3/](../figures/stage3/)
 
 ---
 
@@ -137,7 +137,7 @@ Loss 分解：
 
 ### 未做但記下
 
-- 拉 bend 強度到 60°+（[future_ideas.md](future_ideas.md)）
+- 拉 bend 強度到 60°+（[future_ideas.md](../future_ideas.md)）
 - 加 instance 分離 head（panoptic head）— 留給組員模型方向
 - 真實圖片 fine-tune 評估 sim2real gap
 

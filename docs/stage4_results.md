@@ -2,7 +2,7 @@
 
 > 訓練：2026-05-28
 > 計畫：[stage4_plan.md](stage4_plan.md)
-> 對比：[stage3_results.md](stage3_results.md)
+> 對比：[stage3_results.md](history/stage3_results.md)
 > 圖：[docs/figures/stage4/](figures/stage4/)
 
 ---

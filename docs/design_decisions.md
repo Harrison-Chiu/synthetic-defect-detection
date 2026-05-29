@@ -22,7 +22,7 @@
 - 統一 M6 尺寸：Blender 只需一套材質參數，排除尺寸作為變數
 - 選法蘭螺母（而非墊片）：墊片正面是圓形薄片，側面幾乎無特徵，傾角稍變資訊量驟減；法蘭螺母與六角螺母同屬螺母類但輪廓明顯不同，是有意義的挑戰
 - 固定長度 20mm：10mm 軸心太短，側面角度幾乎看不出螺絲；20mm 螺紋清晰
-- 來源：McMaster-Carr（型號見 PLAN.md），STEP 格式透過 FreeCAD 轉 OBJ
+- 來源：McMaster-Carr（型號見 history/plan_overview_s1-2.md），STEP 格式透過 FreeCAD 轉 OBJ
 
 ---
 
@@ -76,7 +76,7 @@
 
 - 先驗證 pipeline 通，比直接做 detection 風險低
 - 結果：test acc 100%，pipeline 確認可行但問題太簡單
-- 詳細結果見 [stage1_mvp_report.md](stage1_mvp_report.md)
+- 詳細結果見 [stage1_mvp_report.md](history/stage1_mvp_report.md)
 
 ---
 
@@ -110,7 +110,7 @@
 - Bend / Displace 兩種 modifier 涵蓋「幾何彎曲」+「表面凹凸」兩大物理瑕疵類別
 - 純參數驅動，自動化超容易
 - 全 Blender 渲染（不用 Python 後處理瑕疵）：物理光照正確、敘事乾淨
-- 排除其他 modifier 的理由見 [stage2_plan.md](stage2_plan.md) modifier 評估表
+- 排除其他 modifier 的理由見 [stage2_plan.md](history/stage2_plan.md) modifier 評估表
 
 ## 多零件場景合成
 

@@ -20,7 +20,7 @@
 4 類零件 × pure grid 採樣 → 576 張 RGBA PNG → 手刻 CNN 分類 → test acc 100%  
 → 證明 Blender 合成 → 訓練 pipeline 整條通。100% 不具鑑別意義，所以升級到 Stage 2。
 
-完整記錄：[stage1_mvp_report.md](stage1_mvp_report.md)、[weekly/week01.md](weekly/week01.md)、[operations_stage1.md](operations_stage1.md)
+完整記錄：[stage1_mvp_report.md](stage1_mvp_report.md)、[weekly/week01.md](../weekly/week01.md)、[operations_stage1.md](operations_stage1.md)
 
 ### Stage 2（進行中）— Defect Detection
 單一零件（pan_head）+ Modifier 製造瑕疵變體 + Python composite 多零件場景（含重疊） → 自製 Encoder-Decoder semantic segmentation。
@@ -45,7 +45,7 @@
 ## 設計原則（持續遵守）
 
 1. **可復現性 > 採樣多樣性**：能用 pure grid 就不要 random + seed
-2. **MVP discipline**：當前階段聚焦最小可行，新點子寫到 [future_ideas.md](future_ideas.md)
+2. **MVP discipline**：當前階段聚焦最小可行，新點子寫到 [future_ideas.md](../future_ideas.md)
 3. **自製優先**：不用 pretrained model、不抄 SOTA 架構，自己設計 tailored to 我們的任務
 4. **資料端解決資料問題、模型端解決模型問題**：例如 overlap instance 分離有兩條路，先選資料端能解的，難題給組員研究
 
@@ -82,4 +82,4 @@ docs/
 
 - 報告日：2026/06/02 或 06/09，英文口頭 10–15 min + Q&A 3 min
 - 繳交：單一 .zip 含 .ipynb + 投影片 + 資料來源
-- 課程要求摘要：[reference/course_requirements.md](reference/course_requirements.md)
+- 課程要求摘要：[reference/course_requirements.md](../reference/course_requirements.md)

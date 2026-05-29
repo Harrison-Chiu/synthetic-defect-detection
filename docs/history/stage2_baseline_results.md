@@ -62,13 +62,13 @@ Recall 高是因為 CC 把所有非背景 blob 都當 instance、defect/normal �
 3. 高 pixel accuracy（94%）是 bg + normal 主導的副產物，**不能反映任務真實表現**
 4. defect 的 class weight 2.3× 不足以對抗 5% 像素 minority
 
-訓練曲線（[training_curves.png](figures/stage2/training_curves.png)）也顯示 val defect IoU 從來沒突破 0.20，30 epoch 完全沒有上升趨勢，模型穩定收斂到「不輸出 class 2」的 local minimum。
+訓練曲線（[training_curves.png](../figures/stage2/training_curves.png)）也顯示 val defect IoU 從來沒突破 0.20，30 epoch 完全沒有上升趨勢，模型穩定收斂到「不輸出 class 2」的 local minimum。
 
 ---
 
 ## 報告用圖檔
 
-全在 [docs/figures/stage2/](figures/stage2/)：
+全在 [docs/figures/stage2/](../figures/stage2/)：
 
 | 檔名 | 用途 |
 |------|------|
@@ -103,7 +103,7 @@ Recall 高是因為 CC 把所有非背景 blob 都當 instance、defect/normal �
 風險：可能還是治不了 defect 視覺特徵太弱的根本問題。
 
 ### C. 質疑資料端
-- displace_light/heavy 在 [parts_preview.png](figures/stage2/parts_preview.png) 視覺幾乎看不出來（render_gotchas Stage 2 已記錄 strength unit 已修正）
+- displace_light/heavy 在 [parts_preview.png](../figures/stage2/parts_preview.png) 視覺幾乎看不出來（render_gotchas Stage 2 已記錄 strength unit 已修正）
 - 可能要回 Blender 加大 displace strength 重新渲，或乾脆暫時剔除 displace 兩個 state
 - 對照組：純 bend defect 模型若 IoU 突然合理 → 確認 displace 是噪音
 

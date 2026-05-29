@@ -1,7 +1,7 @@
 # Stage 4 計畫 — Bug 修復 + 細粒度監督
 
 > 重寫：2026-05-28
-> 前情：[stage3_results.md](stage3_results.md)
+> 前情：[stage3_results.md](history/stage3_results.md)
 > 立場：只做有獨立理由的改動。不預先承諾「修 bend 的方法」，先把已知 bug 修完看數字怎麼動，再決定後續。
 
 ---

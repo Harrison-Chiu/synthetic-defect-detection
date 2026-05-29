@@ -216,7 +216,7 @@ elif state == "displace_heavy":
 - **Defect type 分類**：目前 mask 只區分 normal/defective，不區分 bend vs displace。是否要進一步分類？
 - **Sim-to-real 評估**：實體拍幾張 pan_head 真實照片做測試集，看 domain gap
 
-詳見 [future_ideas.md](future_ideas.md)。
+詳見 [future_ideas.md](../future_ideas.md)。
 
 ---
 

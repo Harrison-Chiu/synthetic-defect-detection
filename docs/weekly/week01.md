@@ -23,7 +23,7 @@
 - 建 conda 環境（python 3.11 + torch cu121 + jupyter）
 - 寫 train.ipynb：手刻 CNN with skip connection（延續 HW9 風格）
 - 跑訓練：**test acc 100%** → MVP pipeline 確認可行
-- 寫 Stage 1 報告 [docs/stage1_mvp_report.md](../stage1_mvp_report.md)
+- 寫 Stage 1 報告 [docs/stage1_mvp_report.md](../history/stage1_mvp_report.md)
 
 ---
 

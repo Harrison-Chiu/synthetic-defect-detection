@@ -25,8 +25,6 @@
 2. **Predictive Maintenance**：設備健康度預測、故障預警
 3. **Sorting & Grasping Guided Systems**：零件辨識計數、抓取位置偵測
 
-> 本組選擇：**Sorting & Grasping Guided Systems**
-
 ---
 
 ## 繳交內容
