@@ -278,6 +278,47 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
     return SceneSample(rgb=canvas, semantic=semantic, instance=instance, meta=meta)
 
 
+def write_scene(sample: SceneSample, scene_dir: str | os.PathLike) -> None:
+    """把一張場景落地成磁碟格式(與舊 composite.py 一致:四個檔)。
+
+    給 freeze-eval / samples 用 —— 訓練不落地,只有需要『凍結/可比/配圖』時才寫。
+    """
+    import json
+    from pathlib import Path
+
+    d = Path(scene_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(sample.rgb).save(d / "rgb.png")
+    Image.fromarray(sample.semantic).save(d / "semantic_mask.png")
+    Image.fromarray(sample.instance).save(d / "instance_mask.png")
+    with open(d / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(sample.meta, f, indent=2, ensure_ascii=False)
+
+
+def freeze_scene_set(
+    out_root: str | os.PathLike,
+    n: int,
+    assets: Assets,
+    config: GenConfig = DEFAULT_CONFIG,
+    index_offset: int = 0,
+) -> list[int]:
+    """生成並落地 n 張場景到 out_root/{00000..}/。回傳寫出的 scene id 清單。
+
+    用 index_offset 把 eval / samples 推到保留高位區段(見 config 的 *_INDEX_OFFSET),
+    確保與訓練場景互斥。落地後的目錄即 EvalSetDataset 可直接讀的格式。
+    """
+    from pathlib import Path
+
+    out_root = Path(out_root)
+    ids = []
+    for k in range(n):
+        gi = index_offset + k
+        sample = generate_scene(gi, assets, config)
+        write_scene(sample, out_root / f"{k:05d}")
+        ids.append(k)
+    return ids
+
+
 if __name__ == "__main__":
     # 自檢:確定性(同 i 兩次必相同)+ 不重複(不同 i 必不同)。
     from src.data.assets import load_assets

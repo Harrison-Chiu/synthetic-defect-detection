@@ -34,6 +34,12 @@ DEFECT_STATES_DEFECTIVE = frozenset({
     "remesh_light", "remesh_heavy",
 })
 
+# ── index 區段保留 ──────────────────────────────────────────
+# scene(i) 是純函數,因此「index 互斥 = 場景互斥」。給 eval / samples 各保留高位
+# 區段,確保它們的場景永遠不會與訓練(從 0 起算)撞號 → 杜絕資料洩漏。
+EVAL_INDEX_OFFSET = 10_000_000     # 凍結 eval set 用
+SAMPLE_INDEX_OFFSET = 20_000_000   # 報告配圖用
+
 
 @dataclass(frozen=True)
 class GenConfig:
