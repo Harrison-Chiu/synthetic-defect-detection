@@ -144,6 +144,34 @@ class RuntimeSceneDataset(Dataset):
         return sample_to_tensors(sample)
 
 
+# ── 評估:一次生成 → 常駐記憶體(val/test 每輪重用,不重生)──────
+class ListDataset(Dataset):
+    """把已生成的 (rgb_tensor, targets_dict) 清單包成 Dataset。
+
+    val/test 固定不變,跑前用 workers 平行生成一次、收進 list,之後每次 eval
+    直接從 RAM 取(num_workers=0)→ 消除「每次 eval 重生場景」的大宗開銷。
+    """
+
+    def __init__(self, items: list):
+        self.items = items
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx):
+        return self.items[idx]
+
+
+def materialize(dataset: Dataset, batch_size: int = 8, num_workers: int = 8) -> ListDataset:
+    """用 DataLoader 平行跑完一個 dataset,把每筆 (rgb, targets) 收進 ListDataset。"""
+    from torch.utils.data import DataLoader
+    items = []
+    for rgb, targets in DataLoader(dataset, batch_size=batch_size, num_workers=num_workers):
+        for i in range(rgb.shape[0]):
+            items.append((rgb[i], {k: v[i] for k, v in targets.items()}))
+    return ListDataset(items)
+
+
 # ── 評估:凍結磁碟場景 ──────────────────────────────────────
 class EvalSetDataset(Dataset):
     """讀凍結場景目錄(每張一個子資料夾,含 rgb/semantic/instance/meta)。"""

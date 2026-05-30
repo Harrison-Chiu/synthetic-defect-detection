@@ -70,7 +70,7 @@ def cmd_train(args):
     import torch
     from torch.utils.data import DataLoader
 
-    from src.data import RuntimeSceneDataset, load_assets
+    from src.data import RuntimeSceneDataset, load_assets, materialize
     from src.data.config import DEFAULT_CONFIG, EVAL_INDEX_OFFSET, TEST_INDEX_OFFSET
     from src.models import DefectSegNet
     from src.train import DEFAULT_TRAIN_CONFIG, train_loop
@@ -89,18 +89,23 @@ def cmd_train(args):
 
     assets = load_assets()
     train_len = train_cfg.total_steps * train_cfg.batch_size
-    # val / test 皆 runtime 生成(與訓練 0 起算 disjoint;val 與凍結 eval_set 同場景,
-    # 但帶 defect_region → 可算 val loss）。test 在獨立高位區段,只報數字。
+    # train:runtime 生成(workers 平行,藏在 GPU 後)。
+    # val/test:**一次生成 → 常駐記憶體**(每輪 eval 重用,不重生 = 大宗提速)。
+    # 三者 index 區段 disjoint(0 / EVAL / TEST offset),杜絕洩漏。
     train_ds = RuntimeSceneDataset(length=train_len, assets=assets, config=gen_cfg, index_offset=0)
-    val_ds = RuntimeSceneDataset(length=n_eval, assets=assets, config=gen_cfg, index_offset=EVAL_INDEX_OFFSET)
-    test_ds = RuntimeSceneDataset(length=n_eval, assets=assets, config=gen_cfg, index_offset=TEST_INDEX_OFFSET)
+    print(f"  生成 val/test 各 {n_eval} 張(一次,常駐記憶體)...")
+    val_ds = materialize(RuntimeSceneDataset(n_eval, assets, gen_cfg, EVAL_INDEX_OFFSET),
+                         batch_size=train_cfg.batch_size, num_workers=workers)
+    test_ds = materialize(RuntimeSceneDataset(n_eval, assets, gen_cfg, TEST_INDEX_OFFSET),
+                          batch_size=train_cfg.batch_size, num_workers=workers)
     train_loader = DataLoader(train_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=workers)
-    val_loader = DataLoader(val_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=workers)
-    test_loader = DataLoader(test_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=workers)
+    val_loader = DataLoader(val_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=0)
+    test_loader = DataLoader(test_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=0)
 
-    # 固定快照批:取 val set 前幾張
+    # 固定快照批:取 val set 前幾張(含 GT,snapshot 要對照)
     n_snap = min(4, n_eval)
-    snap_batch = torch.stack([val_ds[i][0] for i in range(n_snap)]) if n_snap else None
+    snap_batch = (torch.stack([val_ds[i][0] for i in range(n_snap)]),
+                  torch.stack([val_ds[i][1]["sem3"] for i in range(n_snap)])) if n_snap else None
 
     model = DefectSegNet(base_c=train_cfg.base_c)
     print(f"train tag={args.tag} device={device} base_c={train_cfg.base_c} "
@@ -118,8 +123,7 @@ def cmd_eval(args):
 
     from src.data import EvalSetDataset
     from src.models import DefectSegNet
-    from src.eval import evaluate_3class, evaluate_per_state
-    from src import schema
+    from src.eval import evaluate_all
 
     device = _device(args.device)
     ckpt_path = Path(args.runs) / args.tag / "best.pt"
@@ -135,14 +139,13 @@ def cmd_eval(args):
     model.load_state_dict(ckpt["state_dict"])
 
     loader = DataLoader(EvalSetDataset(eval_dir), batch_size=8, shuffle=False, num_workers=0)
-    m = evaluate_3class(model, loader, device)
-    per_state = evaluate_per_state(model, loader, device)
+    m = evaluate_all(model, loader, device)
     print(f"pixel_acc={m['pixel_acc']*100:.2f}%  mIoU={m['mIoU']:.3f}")
     for c, name in enumerate(["background", "normal_part", "defective_part"]):
         print(f"  {name:18s} IoU={m['IoU_per_class'][c]:.3f}")
-    print("per-state(偵測率 / defect IoU):")
-    for name, d in per_state.items():
-        print(f"  {name:18s} det={d['det_rate']*100:5.1f}%  IoU={d['iou']:.3f}  (n={d['n_px']})")
+    print("per-state 偵測率(normal 列=好件誤報率):")
+    for name, d in m["per_state"].items():
+        print(f"  {name:18s} det={d['det_rate']*100:5.1f}%  (n={d['n_px']})")
 
 
 # ── render(Blender 側,shell out)+ gen-backgrounds(純 conda)──

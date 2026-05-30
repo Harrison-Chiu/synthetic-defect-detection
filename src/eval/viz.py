@@ -22,29 +22,48 @@ def mask_to_color(m: np.ndarray) -> np.ndarray:
     return _CMAP[m]
 
 
+def _denorm_rgb(rgb_t):
+    """(3,H,W) [-1,1] → (H,W,3) uint8。"""
+    import numpy as np
+    a = (rgb_t * 0.5 + 0.5).clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+    return (a * 255).astype(np.uint8)
+
+
 @torch.no_grad()
-def save_prediction_snapshot(model, rgb_batch, step: int, out_dir: str | Path, device) -> str:
-    """對固定一批 rgb 做 3-class 預測並存成一張對照圖。"""
+def save_prediction_snapshot(model, snapshot_batch, step: int, out_dir: str | Path, device) -> str:
+    """固定一批做預測,每列 RGB | GT | Pred | P(defect),存成對照圖。
+
+    snapshot_batch: (rgb_tensor (N,3,H,W), gt_tensor (N,H,W) 3-class) —— 有 GT 才看得出對錯。
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    rgb_batch, gt_batch = snapshot_batch
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     model.eval()
     outputs = model(rgb_batch.to(device))
-    pred, _, _ = infer_3class(outputs)
+    pred, _, defect_prob = infer_3class(outputs)
     pred = pred.cpu().numpy()
+    defect_prob = defect_prob.cpu().numpy()
+    gt = gt_batch.cpu().numpy()
 
     n = pred.shape[0]
-    fig, axes = plt.subplots(1, n, figsize=(3 * n, 3))
+    cols = ["RGB", "GT", "Pred", "P(defect)"]
+    fig, axes = plt.subplots(n, 4, figsize=(12, 3 * n))
     if n == 1:
-        axes = [axes]
+        axes = axes[None, :]
     for i in range(n):
-        axes[i].imshow(mask_to_color(pred[i]))
-        axes[i].axis("off")
-        axes[i].set_title(f"sample {i}", fontsize=8)
-    fig.suptitle(f"step {step} predictions", fontsize=10)
+        axes[i, 0].imshow(_denorm_rgb(rgb_batch[i]))
+        axes[i, 1].imshow(mask_to_color(gt[i]))
+        axes[i, 2].imshow(mask_to_color(pred[i]))
+        axes[i, 3].imshow(defect_prob[i], cmap="hot", vmin=0, vmax=1)
+        for j, name in enumerate(cols):
+            axes[i, j].axis("off")
+            if i == 0:
+                axes[i, j].set_title(name, fontsize=9)
+    fig.suptitle(f"step {step}  (GT/Pred: 黑=bg 綠=normal 紅=defect)", fontsize=10)
     plt.tight_layout()
     out = out_dir / f"step_{step:06d}.png"
     plt.savefig(out, dpi=80, bbox_inches="tight")

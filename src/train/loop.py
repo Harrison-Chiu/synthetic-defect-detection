@@ -23,7 +23,7 @@ from pathlib import Path
 
 import torch
 
-from src.eval.metrics import evaluate_3class, evaluate_per_state, evaluate_loss
+from src.eval.metrics import evaluate_all
 from src.eval.viz import save_prediction_snapshot
 from src.train.config import DEFAULT_TRAIN_CONFIG, TrainConfig
 from src.train.losses import multihead_loss
@@ -105,15 +105,15 @@ def train_loop(
             samples = run_loss_n * cfg.batch_size
             sps = samples / max(1e-6, window_dt)
 
-            val = evaluate_3class(model, val_loader, device, defect_thr=cfg.defect_thr)
-            val_loss = evaluate_loss(model, val_loader, device, cfg.head_weights, cfg.pos_weight)
+            val = evaluate_all(model, val_loader, device, defect_thr=cfg.defect_thr,
+                               head_weights=cfg.head_weights, pos_weight=cfg.pos_weight)
             cur_lr = optimizer.param_groups[0]["lr"]
             avg_loss = run_loss_sum / max(1, run_loss_n)
             run_loss_sum, run_loss_n = 0.0, 0
 
             history["step"].append(step)
             history["L_total"].append(avg_loss)
-            history["val_L_total"].append(val_loss["L_total"])
+            history["val_L_total"].append(val["loss"]["L_total"])
             history["val_mIoU"].append(val["mIoU"])
             history["val_IoU_bg"].append(val["IoU_per_class"][0])
             history["val_IoU_normal"].append(val["IoU_per_class"][1])
@@ -128,7 +128,7 @@ def train_loop(
             iou = val["IoU_per_class"]
             gpu_mb = (torch.cuda.max_memory_allocated() / 1e6) if torch.cuda.is_available() else 0
             _log(log_path, f"step {step:5d}/{cfg.total_steps} lr={cur_lr:.1e} "
-                           f"L={avg_loss:.3f} vL={val_loss['L_total']:.3f} "
+                           f"L={avg_loss:.3f} vL={val['loss']['L_total']:.3f} "
                            f"mIoU={val['mIoU']:.3f} bg={iou[0]:.3f} norm={iou[1]:.3f} "
                            f"def={iou[2]:.3f} | {sps:.1f} smp/s gpu={gpu_mb:.0f}MB")
             scheduler.step(val["mIoU"])
@@ -149,8 +149,11 @@ def train_loop(
     # 最終數字:test set(獨立)優先;無則退回 val
     report_loader = test_loader if test_loader is not None else val_loader
     split_name = "test" if test_loader is not None else "val"
-    test_metrics = evaluate_3class(model, report_loader, device, defect_thr=cfg.defect_thr)
-    per_state = evaluate_per_state(model, report_loader, device, defect_thr=cfg.defect_thr)
+    final = evaluate_all(model, report_loader, device, defect_thr=cfg.defect_thr,
+                         head_weights=cfg.head_weights, pos_weight=cfg.pos_weight)
+    test_metrics = {"pixel_acc": final["pixel_acc"], "mIoU": final["mIoU"],
+                    "IoU_per_class": final["IoU_per_class"]}
+    per_state = final["per_state"]
     _log(log_path, f"[{split_name}] mIoU={test_metrics['mIoU']:.3f} "
                    f"defectIoU={test_metrics['IoU_per_class'][2]:.3f} "
                    f"pixel_acc={test_metrics['pixel_acc']*100:.2f}%")
