@@ -80,6 +80,7 @@ def cmd_train(args):
     train_cfg = DEFAULT_TRAIN_CONFIG
     _overrides = {k: v for k, v in (("base_c", args.base_c),
                                     ("depth", args.depth),
+                                    ("pos_weight", args.pos_weight),
                                     ("total_steps", args.total_steps),
                                     ("eval_every", args.eval_every)) if v is not None}
     if _overrides:
@@ -207,6 +208,7 @@ def build_parser():
     pt.add_argument("--workers", type=int, default=None, help="DataLoader workers(預設取 TrainConfig=8)")
     pt.add_argument("--base-c", type=int, default=None, help="覆寫 base_c(寬度掃描用)")
     pt.add_argument("--depth", type=int, default=None, help="覆寫 depth(層數,深度掃描用)")
+    pt.add_argument("--pos-weight", type=float, default=None, help="覆寫 defect BCE pos_weight(壓 FP 用)")
     pt.add_argument("--total-steps", type=int, default=None, help="覆寫 total_steps")
     pt.add_argument("--eval-every", type=int, default=None, help="覆寫 eval_every")
     pt.add_argument("--n-eval", type=int, default=100, help="val/test 各幾張(runtime 生成)")

@@ -31,7 +31,8 @@ class TrainConfig:
     # S5 雙頭 loss 權重(A=part, B=defect;B 即 λ)
     head_weights: dict[str, float] = field(default_factory=lambda: {"A": 1.0, "B": 1.0})
     pos_weight: float = 8.0        # defect 頭 BCE 正類權重 ρ(補變形區稀少)
-    defect_thr: float = 0.5        # 推論時 sigmoid > thr 判 defect
+    defect_thr: float = 0.7        # 推論 sigmoid > thr 判 defect。0.7 由 sweep_defect_thr 定:
+                                   # bc8 上 thr=0.7 → defect IoU 0.365(≈S3)且 normal FP 22%→7%
 
     # DataLoader(runtime 生成防阻塞:workers 平行生成,實測 8 → ~11×)
     num_workers: int = 8
