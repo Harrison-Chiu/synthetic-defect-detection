@@ -42,12 +42,27 @@ bc8 上掃推論閾值:**thr 0.5→0.7 → defect IoU 0.296→0.365(≈/勝 S3 0
 ### 模型已可調深度(commit `4a51447`)
 segnet enc/dec → ModuleList + `depth` 參數;depth=4 與原架構參數完全一致;舊 ckpt 經 flexible loader 仍可載。
 
-### 下一步(用戶定序 2026-05-31)
-1. ✅ base_c 上/下掃完(飽和 + 下邊界)。
-2. 🔄 **深度探針 {d3,d2} + pos_weight {3,5} 掃描**(base_c=8)`output/s5_arch_fp.log`。
-3. ⬜ 統一重生所有 report(thr=0.7);彙整深度/pos_weight 結果。
-4. ⬜ **長版 15000 步(5×)** 看過擬合拐點,最後跑(選定 size+旋鈕後)。
-- ⬜ w_norm 旋鈕尚未 plumb(需 encode_targets 參數化);S3 的 A 圖未進 report;`.ipynb` 繳交橋(6/2)。
+### 深度探針 + pos_weight 掃描(thr=0.7 統一評估,完成)
+| run | params | pos_w | defIoU | normalFP | bend | disp | rem |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| bc8 d4 | 208K | 8 | 0.365 | 7.0% | 9% | 40% | 86% |
+| bc8 **d3** | **52K** | 8 | 0.324 | 8.8% | 14% | 40% | 78% |
+| bc8 d2 | 13K | 8 | 0.257 | 12% | 17% | 35% | 68% |
+| **pw5** | 208K | **5** | **0.385** | 5.1% | 6% | 40% | 85% |
+| pw3 | 208K | 3 | 0.353 | 3.1% | 4% | 28% | 75% |
+- **深度縮 > 寬度縮**:depth3(52K)defIoU 0.324 遠勝同參數 bc4(52K)的 0.177 → 第4下採樣層近乎冗餘
+  (bottleneck 已覆蓋整顆),**depth=3 是更好的「最小模型」**(4× 小、~89% 效能)。
+- **pos_weight=5 最佳**:defIoU **0.385**(勝 baseline 0.365、勝 S3 0.362)@ FP 5.1%。pw3 過抑。
+- bend 各設定都在 floor(4-17%,且隨 FP 同升)→ 本質弱,確認。
+
+### 選定 headline 模型:base_c=8 / depth=4 / pos_weight=5 / thr=0.7(defIoU 0.385)
+depth=3 為「極小版」備選(52K)。
+
+### 下一步
+1. 🔄 **長版 15000 步(5×)** s5_long(看過擬合拐點)`output/s5_long.log`。
+2. ⬜ 用 thr=0.7 統一重生所有 report;彙整最終報告數字。
+3. ⬜ `.ipynb` 繳交橋(6/2)。
+- ⬜ w_norm 旋鈕未 plumb(pw5+thr0.7 已勝 S3,優先度低);S3 的 A 圖(資料特性)未進 report。
 
 ### 已結案(歸檔 `docs/history/refactor_and_s4_review.md`)
 - **程式大重構**(src/ 分層 + runtime 生成 + cli + output 角色分類)。
