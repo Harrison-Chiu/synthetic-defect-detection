@@ -13,17 +13,20 @@
 - **S4 review**:bend 崩潰根因 = defect 監督「任務形式不匹配」(整顆塗 + 逐像素 loss,對 bend 全域形狀最致命),
   已用程式 + 診斷實驗坐實;先前「物理天花板 / 柔光 HDRI」歸因已證偽作廢。
 
-## S5 方向
-方向已收斂為 **A + c1 融合**(同一個 defect 頭上的兩個角色,不是兩個頭):
-- **A**:換 target —— 同 pose normal vs defect patch 相減 → per-pixel「真正變形區」mask(資料已在,不需重渲)。
-- **c1**:換評分 —— 寬容定位 loss(正向寬容:抓到瑕疵區就給分;負向嚴格:背景/正常件誤亮就罰),推論讀熱圖峰值、不分實例。
+## S5 方向(已定案,機制與執行步驟見 `docs/stage5_plan.md`)
+**核心單變因 = 壞件內部 ignore**:把 defect 監督裡「壞件內部」從『整顆塗 defect』改成『ignore(W≈0,不算 loss)』,
+直接拔掉害死 bend 的矛盾(看起來正常的內部被逼當 defect)。
+- 模型回 **S3 雙頭**(part 16→2 + defect 16→1 sigmoid)。⚠️ src 現行 `schema.HEADS` 是被否決的三頭(含七類),動工第一步要改回。
+- **只改 Head2 的 target**:變形區=1(膨脹容忍帶)、好件/背景=0、內部 ignore + 高斯權重 W;loss = 加權 Dice+BCE + pos_weight。
+- 變形區 = 同 pose normal vs defect patch 相減(資料已在,不需重渲;閾值圖 `docs/figures/route_a_diff_threshold.png`)。
 
 ### S5 概念性指南(沿用,避免重蹈覆轍)
-1. **bend 崩 = 監督形式不匹配,不是容量/解析度/權重** → 修標籤與評分,別加參數、別調 loss 權重。
-2. **一次只動一個變因**(handoff §6):A、c1、base_c、test set 拆開驗。
-3. **逐像素 IoU 不是終極指標**:目標是「定位畫面中的瑕疵零件」,評估該轉成定位式(峰值落在瑕疵件上)。
+1. **bend 崩 = 監督矛盾,不是容量/解析度/權重** → 修 target(interior ignore),別加參數、別調 loss 權重。
+2. **一次只動一個變因**(handoff §6):核心驗證 = 「只把內部改 ignore,bend recall 從 0 起來」。workers / schema / test set / base_c 拆開做。
+3. **逐像素 IoU 不是終極指標**:目標是「定位瑕疵零件」,評估轉定位式(峰值落在瑕疵件上 → per-part TP/FN/FP/TN)。
 4. **可復現**:資料 `f(seed,i)` 100% 重現;訓練數字近乎重現(cuDNN 浮點微抖,要 bit 級需 deterministic flag)。
 5. **runtime 生成保留**,防阻塞用 DataLoader workers(實測 workers=8 → 11×),非預存。
+6. **名詞**:BCE=逐像素該不該亮(被多數類淹沒);Dice=整塊重疊率(抗不平衡);S3 用 Dice+BCE 把 defect IoU 0.004→0.362。
 
 ### 仍待辦(非 S5 主線,但截止前要顧)
 - **`.ipynb` 繳交橋**:課程要 .ipynb 原始碼,我們是 src/ 套件 → 截止(6/2)前需一條橋(薄 notebook import src + 跑 cli)。

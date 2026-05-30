@@ -5,10 +5,10 @@
 
 ---
 
-## 0. 一句話方向
+## 0. 一句話方向（已定案）
 
-把 defect 監督從「整顆塗 + 逐像素 Dice」改成**「A:乾淨的 per-pixel 變形目標」+「c1:寬容的定位式評分」**,
-讓 bend(全域形狀瑕疵)從 recall 0 拉起來;同時把模型瘦到「剛好飽和」。
+**核心單變因:把 defect 監督裡「壞件內部」從『整顆塗成 defect』改成『ignore(不算 loss)』** —— 直接拔掉害死 bend 的監督矛盾(看起來正常的內部像素被逼當 defect)。
+模型回到 **S3 雙頭**(乾淨基準),**只改 Head2 的 target**:變形區=1、內部 ignore、好件/背景=0,外加一張高斯權重圖 W;loss 沿用 S3 的 Dice+BCE 再加 pos_weight。同時把模型瘦到剛好飽和。
 
 ---
 
@@ -20,10 +20,13 @@
    → **TODO:** 新增 `TEST_INDEX_OFFSET`(如 30_000_000),凍第二批 disjoint 場景;loop 收 val(選 best)與 test(報數字)分離。
 3. **模型瘦身**:`base_c` 是寬度總旋鈕,參數 ∝ `base_c²`。
    實測:base_c 8→208K / 16→830K / 24→1.86M / 32→3.31M。詳見 §4 掃描計畫。
-4. **修正路線 = A + c1 融合(同一個 defect 頭上的兩個角色,不是兩個頭)**:
-   - **A(換 target)**:同 pose 的 normal vs defect patch 相減 → per-pixel「真正變形區」mask。資料已在 `output/patches/normal/`,**不需重渲**,離線算一次存 `*_defectmask.png`。
-   - **c1(換評分)**:寬容、不對稱的定位 loss —— 正向寬容(抓到瑕疵區就給分,不要求填滿)、負向嚴格(背景/正常件誤亮就罰)。推論讀熱圖峰值,不分實例。
-5. **暫不做** loss 動態加權(對 bend 無效甚至有害:bend 低是 label 矛盾不是權重不足)。
+4. **模型回 S3 雙頭**(part 16→2 + defect 16→1 sigmoid)。
+   ⚠️ **重要事實**:src 目前的 `schema.HEADS`(A/B/C,含七類 state)是**被否決的 S4 三頭 multi-head**,不是 S3 雙頭。
+   → S5 動工第一步 = 把 schema 改回 S3 雙頭(順手解決「七類不該在」)。S4-best 與 S3 同為雙頭(見 `model_architecture_handoff.md §4`)。
+5. **修正 = 只改 Head2 的 target**(換 target,不動架構;見 §3 機制):
+   - **A(變形區來源)**:同 pose normal vs defect patch 相減 → 變形區 mask。資料已在,**不需重渲**,離線算一次存 `*_defectmask.png`。
+   - **interior ignore + 高斯權重 W**:壞件內部 ignore、好件/背景=0、變形區=1。loss = 加權 Dice+BCE + pos_weight。
+6. **暫不做** loss 動態加權 / curriculum(出問題再加)。bend 低是 label 矛盾不是權重不足,動態加權對它無效甚至有害。
 
 ---
 
@@ -62,34 +65,66 @@ U-Net:4 層下採樣 → bottleneck → 4 層上採樣,每層 skip-concat。Conv
 
 ---
 
-## 3. S5 算分設計（討論中,已收斂大方向）
+## 3. S5 機制(講解版,已定案計算流程)
 
-**頭設計(已傾向):** 雙頭 `part`(bg/part)+ `defect`(1ch 熱圖)。state/type 拿掉,日後要分瑕疵種類再以 instance-level 接回。
+**核心:壞件內部 ignore = 拔掉矛盾。** 其餘(高斯 W、pos_weight、容忍帶、推論對位)是讓它更穩/更好用的配套。
 
-**訓練 = MIL 式(用 GT instance 分零件算分),推論 = 讀熱圖峰值(不分實例)。**
-
-**loss 形式(c1,寬容定位):**
+### 離線一次（每個 patch:pose × defect_state）
 ```
-L = λ_pos · sum_over_defparts( 1 − s_p )           # s_p = 該壞件區域峰值(或 top-k mean)
-  + λ_neg(t) · mean_over_normalpart∪bg( s_i )        # 好件/背景響應壓低
+M = despeckle( mean_RGB|defect_patch − normal_patch| > thr )     # 變形區,二值。thr≈25–30
 ```
-- 正向用 **sum**(多抓多得,自然處理不定瑕疵數,符合 2/2 > 1/1 直覺);**只看峰值不要求填滿** → 對 bend 寬容。
-- 負向**逐像素壓低** → 抑制誤報(嚴格)。
-- **報告 metric** 另用 recall/precision 正規化(跨資料集才公平),與訓練 loss 分開。
+存成 patch 旁的 `*_defectmask.png`。閾值佐證見 `docs/figures/route_a_diff_threshold.png`
+(thr=30 時:bend_heavy 36% / bend_light 5% / displace_h 4% / remesh_h 43% 區;bend 變形集中頭緣+輪廓,內部≈0)。
+- bend 幾何註記:SIMPLE_DEFORM 繞原點彎(根固定、尖端彎),normal/defect 共用原點 → 相減已正確配準,**不要按質心歸零**(會把對齊的根推開、製造假 diff)。
 
-**curriculum + 防退化(解「為了不扣分而不答」):**
-- `λ_neg(t)` 從 ~0 線性 warm-up → 目標值:前期敢開火建 recall,後期收緊 precision。
-- 不變式:warm-up 期保證「抓到一顆壞件的獎勵 > 不答省下的罰」→ 全不答必虧 → 強制開火。
+### 每張場景（組 defect 頭的 target T 與 weight W,256×256）
+```
+D   = 所有壞件的變形區（各自 M 貼到場景位置）
+D⁺  = D 膨脹 3–5 px（容忍帶:亮在附近也算對）
+N   = 所有正常件的剪影
 
-**評估(per-part 定位):** 每顆零件區域峰值 >閾值 → 測為瑕疵。壞件中→TP/漏→FN;好件亮→FP/靜→TN。報 precision/recall/F-β + 混淆矩陣。
+Target T(x) = 1   if x∈D⁺        （該亮）
+            = 0   otherwise       （正常件/背景:不該亮;壞件內部 T 無所謂,因 W≈0）
 
-### ⬜ 仍待敲定
-1. **FN vs FP 誰更糟?** 使用者初步偏「FP(誤報)更糟」(precision-favoring),與傳統 QC「FN(漏檢)更糟」相反 → 決定 λ 比重 / F-β 的 β。**待確認。**
-2. **c1 target 怎麼從 A mask 生:** 直接用?膨脹幾 px?質心高斯 blob?(膨脹/模糊給位置容忍,對細邊的 bend 重要)。
-3. **評估邊界:** ① 峰值橫跨兩相鄰零件算誰的;② 峰值落在零件「附近背景」算 TP 還 FP;③ 閾值怎麼定(掃 PR 曲線)。
-4. **λ_pos / λ_neg 目標值與 warm-up 長度** 的具體數字(進 TrainConfig)。
+Weight W(x) = max( GaussBlur(D⁺, σ=5–8px) ,  w_norm·1{x∈N} )
+              遠背景 & 壞件內部 → 0   （= ignore,矛盾就消在這）
+```
+- 高斯 W = 你要的「漸層 ignore 圖」:變形區附近 W 高、向外淡出;遠處 W≈0 = 不在意。
+- σ 太大 → 糊進內部把 ignore 變成「T=0 輕罰」(病復發);σ 太小 → 退化成硬 mask 無容忍。σ 5–8 + 膨脹 3–5 剛好。
+
+### loss
+```
+L_defect = Σ_x W(x)·BCE_pw( ŝ(x), T(x) ) / Σ_x W(x)   # +可選 Dice(吃 W);pos_weight=ρ 補正類稀少
+L_part   = CE( part_logits, bg/part mask )             # 不變
+L_total  = L_part + λ·L_defect
+```
+- **BCE**:逐像素「該亮沒亮/不該亮卻亮」,精準但被多數類淹沒。**Dice**:看整塊重疊率,抗極端不平衡。S3 用 Dice+BCE 把 defect IoU 從 0.004→0.362,故保留。
+- **pos_weight ρ**:固定值(非動態),補變形區像素太少(bend_light 僅 5%)。
+
+### 推論
+`ŝ` 取峰值/閾值 → 亮區與 part mask 對位 → **某顆零件上有亮 ⇒ 判整顆為瑕疵件**(「整顆是壞件」的語意在此實現,不在像素監督)。
+
+### ⬜ 仍待敲定的數值/規則（執行時定）
+1. **thr(25–30)** + despeckle 大小;**σ(5–8)** + **D⁺ 膨脹(3–5)**。
+2. **pos_weight ρ**(估 5–10);**λ**(defect vs part);**w_norm**(好件權重)、背景 W(0 或留一點)。
+3. **是否保留 Dice**、Dice 是否吃 W。
+4. **推論**:閾值 + 「熱圖 blob 算哪顆零件」的重疊規則;評估邊界(峰值橫跨兩零件、落在零件附近背景算 TP/FP)。
+5. **FN vs FP 取捨**(影響評估 F-β 的 β;訓練端先對稱,出問題再調)。
 
 ---
+
+## 3.5 執行順序（動工步驟,compact 後照此走）
+
+1. **修 workers**:cli `--workers` 預設 8(或進 TrainConfig),跑一次量真實牆鐘。
+2. **schema 改回 S3 雙頭**:`src/schema.py` 拿掉 B(state,七類)/C(type),defect 頭改 `16→1` sigmoid(對齊 S3/S4-best)。同步改 model heads、metrics、losses 對 head 的引用。
+3. **離線產變形區 mask**:寫一支 script 對 `output/patches/<state>/*` 用 §3 公式算 `*_defectmask.png`(thr 用閾值圖挑)。
+4. **改 `encode_targets`**:defect 頭吐 (T, W) —— 變形區=1、膨脹容忍帶、好件/背景=0、壞件內部與遠背景 W≈0。
+5. **改 loss**:加權 BCE(+可選 Dice,吃 W)+ pos_weight。
+6. **獨立 test set**:加 `TEST_INDEX_OFFSET`,freeze 第二批;loop 把 val(選 best)/ test(報數字)分離。
+7. **跑 S5 vs S3 baseline**:看 bend recall 是否從 0 起來(核心驗證:單變因 = interior ignore)。
+8. **base_c 掃描**(見 §4):找飽和寬度。
+
+> **驗證的核心命題**:「只把壞件內部從『塗 defect』改成『ignore』,bend recall 就該從 0 抬起」。這是單變因實驗,別一次混入多個改動。
 
 ## 4. base_c 掃描計畫
 
