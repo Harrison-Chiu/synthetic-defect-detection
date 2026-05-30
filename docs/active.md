@@ -9,17 +9,27 @@
 ## 狀態:S5 施工中(report 日 2026-06-02)｜計畫詳見 `docs/stage5_plan.md`
 
 ### 進度(2026-05-31)
-- ✅ **步驟3** defectmask 離線生成(`scripts/gen_defectmask.py`,432 張,thr=30)。commit `ce3c6c6`。
-- ✅ **步驟1/2/4/5/6** 核心:雙頭 + interior-ignore (T,W) + 加權 loss + val/test 分離 +
-  workers=8 + 效能 log。commit `e48918c`。smoke-test 全路徑通過。
-- 🔄 **步驟7/8** base_c 掃描 {8,16,24,32}(bc32=headline S5-vs-S3)夜間背景跑中,
-  log: `output/s5_sweep.log`、各 `output/runs/s5_bc*/`。早期 bc8 step800 defect IoU≈0.20。
-- ⬜ 待掃描完:看三瑕疵分項(尤其 **bend recall 是否從0起來** = 核心驗證;displace 是否如預期回落)。
-- ⬜ 報告產出:S3 八圖復現、三瑕疵分項表(per-state 已入 report/metrics)。
-- ⬜ `.ipynb` 繳交橋(6/2 截止)。
+- ✅ **步驟3** defectmask(`scripts/gen_defectmask.py`,432 張,thr=30)。commit `ce3c6c6`。
+- ✅ **步驟1/2/4/5/6** 核心:雙頭 + interior-ignore (T,W) + 加權 loss + val/test 分離。commit `e48918c`。
+- ✅ **提速 + 修 eval + 豐富 report**:ListDataset/materialize(val/test 一次生成常駐)+ 單次前向
+  evaluate_all → bc8 3000步 8min→~4min;修 per-state IoU union bug;report 48KB→2.1MB
+  (KPI對S3、train/val loss、預測面板、FP/FN、混淆矩陣、per-instance箱、per-type)。commit `38c8b8d`/`a395212`。
+- ✅ **步驟7/8** base_c 掃描 {8,16,24,32}:**defect IoU 全平 0.287-0.299 → 已飽和,容量非瓶頸**。
 
-> ⚠️ displace trade-off:displace 變形區佔零件僅 1.6-12%(interior-ignore 會犧牲其 dense 內部訊號),
-> 已決議**選1:照原案跑、用分項數據看**,真崩再考慮 per-type 處理(會破壞單變因,審慎)。
+### S5 結果判讀(關鍵數字,bc8≈bc24)
+| type | 偵測率 | inst IoU | vs S3 |
+| --- | --- | --- | --- |
+| bend | ~33% | **0.115** | S3 ~0.006 → **~5×,離地了**(核心命題成立 ✅) |
+| displace | ~62% | 0.23 | S3 ~0.43 → **回落約一半**(如預測 trade-off ⚠️) |
+| remesh | ~93% | 0.32 | 最強,邊緣訊號扛得住 ignore |
+- ⚠️ **好件誤報率(normal FP)= 22-25%**:模型過度判正 → bend 帳面被底噪灌水。
+  根因 = loss 平衡(pos_weight=8 太推正 / w_norm 太弱),**多 step 修不掉**,要調旋鈕。
+
+### 下一步(用戶定序 2026-05-31)
+1. 🔄 **再往下縮 base_c {2,4,6}** 找飽和下邊界(bc2=13K params)。`output/s5_downsweep.log`。
+2. ⬜ **壓 FP**:pos_weight↓(8→3/5)、defect_thr↑(0.5→0.6/0.7,推論端免重訓可先掃)、w_norm↑(0.3→0.5/0.8)。
+3. ⬜ **長版**(選定 size+旋鈕後,如 8000-10000 步)最後跑。
+- ⬜ 報告:S3 的 A 圖(資料特性,與模型無關)未進 report;`.ipynb` 繳交橋(6/2)。
 
 ### 已結案(歸檔 `docs/history/refactor_and_s4_review.md`)
 - **程式大重構**(src/ 分層 + runtime 生成 + cli + output 角色分類)。
