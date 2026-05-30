@@ -6,7 +6,20 @@
 
 ---
 
-## 狀態:S5 規劃中(report 日 2026-06-02)｜計畫詳見 `docs/stage5_plan.md`
+## 狀態:S5 施工中(report 日 2026-06-02)｜計畫詳見 `docs/stage5_plan.md`
+
+### 進度(2026-05-31)
+- ✅ **步驟3** defectmask 離線生成(`scripts/gen_defectmask.py`,432 張,thr=30)。commit `ce3c6c6`。
+- ✅ **步驟1/2/4/5/6** 核心:雙頭 + interior-ignore (T,W) + 加權 loss + val/test 分離 +
+  workers=8 + 效能 log。commit `e48918c`。smoke-test 全路徑通過。
+- 🔄 **步驟7/8** base_c 掃描 {8,16,24,32}(bc32=headline S5-vs-S3)夜間背景跑中,
+  log: `output/s5_sweep.log`、各 `output/runs/s5_bc*/`。早期 bc8 step800 defect IoU≈0.20。
+- ⬜ 待掃描完:看三瑕疵分項(尤其 **bend recall 是否從0起來** = 核心驗證;displace 是否如預期回落)。
+- ⬜ 報告產出:S3 八圖復現、三瑕疵分項表(per-state 已入 report/metrics)。
+- ⬜ `.ipynb` 繳交橋(6/2 截止)。
+
+> ⚠️ displace trade-off:displace 變形區佔零件僅 1.6-12%(interior-ignore 會犧牲其 dense 內部訊號),
+> 已決議**選1:照原案跑、用分項數據看**,真崩再考慮 per-type 處理(會破壞單變因,審慎)。
 
 ### 已結案(歸檔 `docs/history/refactor_and_s4_review.md`)
 - **程式大重構**(src/ 分層 + runtime 生成 + cli + output 角色分類)。
