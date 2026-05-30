@@ -23,17 +23,25 @@
   → pipeline 可信。defect IoU 高於 S4(0.342/0.385)疑因 runtime 資料多樣性大增(24000 distinct vs 800 重用)。
 - ⚠️ 注意:此 per-state 是 **IoU**,S4 報告那張是 **recall**,別逐位對齊。eval set 與訓練同分布(in-distribution)。
 
-## S4 review 議程(下一階段焦點;非結論,待審)
-> S4 原始結果見 `docs/stage4_results.md`(HTML `docs/stage4_report.html`),結論仍 provisional。
-1. **displace_light 退步/崩潰**:S4 recall 0.78→0.235、本次 IoU 0.000。渲染參數沒改,只動 HDRI pool 2→4。
-   疑因新增柔光 HDRI(monochrome_studio_02 / pretoria_gardens)讓 displace 反射訊號變平。→ 調 displace 強度 or 移除柔光 HDRI?
-2. **bend 天花板**:S4 recall 0.06–0.08、本次 IoU 0.000。疑 256px 解析度物理極限。→ 限縮 elevation / 拉 focal / 加大角度?
-3. **multi-head**:S4 記載 aux head 吃 encoder bandwidth(L_A 僅佔 3% 總 loss)。本次 multihead defect IoU 0.457 反而不差
-   → 是 runtime 資料救了它,還是 loss 動態不同?值得查。schema guardrail 已標「instance 標籤套 pixel loss」。
+## S4 review 結果(2026-05-30 已查證,取代先前「物理天花板」誤判)
+> 交接脈絡見 `docs/bend_diagnosis_handoff.md`;S4 原始結果 `docs/stage4_results.md`。
 
-## 下一步(S4 review 後才動)
-1. review 上述三項 → 定位真因。
-2. 才決定 **S5 方向**(可能大改 heads/loss)+ runtime 生成器的 **config 數值調校**(displace/HDRI)。
+**根因(已用程式 + 診斷實驗坐實,非推測):defect 監督的「任務形式不匹配」。**
+- mask 是**整顆零件塗**:`generator.py:251-253`(`is_part = alpha>0.5` → 整個剪影上同一 class,依據 instance 層級的 defect flag,非逐像素幾何偏離);state head 同樣廣播到整顆(`dataset.py:51-58`)。
+- 這正是 `schema.py` guardrail 早標的「`level=INSTANCE` 套逐像素 loss」mismatch —— 兩條獨立線索收斂同一點。
+- **致命性隨「瑕疵的逐像素局部可見度」變化**:bend 是純全域形狀(內部像素 ≈ 正常)→ 逐像素監督要求把看起來正常的像素硬標 defect → 矛盾梯度 → 崩;remesh/displace 是表面紋理/起伏,局部就看得出 → 自洽 → 學得起來。
+- **診斷實驗(s4_repro best.pt,`scripts/diag_perstate_pred.py` → `docs/figures/s4_repro_perstate_pred.png`)**:
+  pred-defect recall 隨局部可見度**單調**:bend_l/h **0.000** < displace_l 0.116 < displace_h 0.800 < remesh_h 0.941 < remesh_l 0.986。
+  bend 圖示:GT 整顆紅、pred 整顆綠(判成正常零件)。佐證 `docs/figures/stage3/A_normal_vs_defect_diff.png`(bend 差異集中輪廓邊緣,remesh/displace 滿表面)。
+
+**三個已知問題重新歸因:**
+1. ~~displace_light「柔光 HDRI」假設~~ → 不需要。它就是「局部可見度低」同一條軸的下端(recall 0.116),與 bend 同因不同程度。
+2. ~~bend「256px 物理天花板」~~ → **證偽且危險**(差異肉眼可見)。動解析度/focal/角度救不了監督矛盾。
+3. **multi-head**:本次 multihead defect IoU 0.457 不差,疑 runtime 資料多樣性緩解;非主線。
+
+## 下一步:規劃 S5(方向已收斂)
+1. **核心修正方向**:把 defect 監督從「整顆塗 + 逐像素 loss」改成與瑕疵本質相符的形式 —— 候選:(a) 合成資料特權,用 normal vs defect 幾何/深度差自動生 per-pixel mask(純 segmentation);(b) 把 state/type 改成 instance-level 監督(region-pooled),不再逐像素廣播。**一次只動一個變因**(沿用 handoff §6 紀律)。
+2. **新比對圖**:可對「目前新版生成器」重做 FIG A 等比對圖(bend_light 已修正方向),後續報告好用。
 3. **`.ipynb` 繳交橋**:課程要 .ipynb 原始碼,我們是 src/ 套件 → 截止(6/2)前需一條橋(薄 notebook import src + 跑 cli)。
 
 ## 仍待處理 / 缺口
