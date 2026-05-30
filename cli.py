@@ -79,6 +79,7 @@ def cmd_train(args):
     gen_cfg = DEFAULT_CONFIG
     train_cfg = DEFAULT_TRAIN_CONFIG
     _overrides = {k: v for k, v in (("base_c", args.base_c),
+                                    ("depth", args.depth),
                                     ("total_steps", args.total_steps),
                                     ("eval_every", args.eval_every)) if v is not None}
     if _overrides:
@@ -107,9 +108,9 @@ def cmd_train(args):
     snap_batch = (torch.stack([val_ds[i][0] for i in range(n_snap)]),
                   torch.stack([val_ds[i][1]["sem3"] for i in range(n_snap)])) if n_snap else None
 
-    model = DefectSegNet(base_c=train_cfg.base_c)
+    model = DefectSegNet(base_c=train_cfg.base_c, depth=train_cfg.depth)
     print(f"train tag={args.tag} device={device} base_c={train_cfg.base_c} "
-          f"workers={workers} run_dir={run_dir}")
+          f"depth={train_cfg.depth} workers={workers} run_dir={run_dir}")
     _, best = train_loop(model, train_loader, val_loader, device, run_dir, train_cfg,
                          snap_batch, test_loader=test_loader)
     print(f"best val mIoU={best['best_val_miou']:.3f}  test mIoU={best['test_metrics']['mIoU']:.3f}  "
@@ -133,10 +134,11 @@ def cmd_eval(args):
     if not eval_dir.exists():
         sys.exit(f"找不到 eval set:{eval_dir}")
 
+    from src.models import load_state_dict_flexible
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    base_c = ckpt.get("train_config", {}).get("base_c", 32)
-    model = DefectSegNet(base_c=base_c).to(device)
-    model.load_state_dict(ckpt["state_dict"])
+    tc = ckpt.get("train_config", {})
+    model = DefectSegNet(base_c=tc.get("base_c", 32), depth=tc.get("depth", 4)).to(device)
+    load_state_dict_flexible(model, ckpt["state_dict"])
 
     loader = DataLoader(EvalSetDataset(eval_dir), batch_size=8, shuffle=False, num_workers=0)
     m = evaluate_all(model, loader, device)
@@ -203,7 +205,8 @@ def build_parser():
     pt.add_argument("--runs", default=str(DEFAULT_RUNS))
     pt.add_argument("--device", default="auto")
     pt.add_argument("--workers", type=int, default=None, help="DataLoader workers(預設取 TrainConfig=8)")
-    pt.add_argument("--base-c", type=int, default=None, help="覆寫 base_c(base_c 掃描用)")
+    pt.add_argument("--base-c", type=int, default=None, help="覆寫 base_c(寬度掃描用)")
+    pt.add_argument("--depth", type=int, default=None, help="覆寫 depth(層數,深度掃描用)")
     pt.add_argument("--total-steps", type=int, default=None, help="覆寫 total_steps")
     pt.add_argument("--eval-every", type=int, default=None, help="覆寫 eval_every")
     pt.add_argument("--n-eval", type=int, default=100, help="val/test 各幾張(runtime 生成)")

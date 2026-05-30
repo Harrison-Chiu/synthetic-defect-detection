@@ -41,28 +41,32 @@ class DefectSegNet(nn.Module):
     skip-concat),只把輸出頭改成 schema 驅動。
     """
 
-    def __init__(self, base_c: int = 32, heads: tuple[schema.Head, ...] = schema.HEADS):
+    def __init__(self, base_c: int = 32, depth: int = 4,
+                 heads: tuple[schema.Head, ...] = schema.HEADS):
         super().__init__()
         c = base_c
         self.heads_spec = heads
-
-        # encoder
-        self.enc1 = ConvBlock(3, c)
-        self.enc2 = ConvBlock(c, c * 2)
-        self.enc3 = ConvBlock(c * 2, c * 4)
-        self.enc4 = ConvBlock(c * 4, c * 8)
+        self.depth = depth
         self.pool = nn.MaxPool2d(2)
-        self.bottleneck = ConvBlock(c * 8, c * 8)
 
-        # decoder
-        self.up4 = nn.ConvTranspose2d(c * 8, c * 4, 2, stride=2)
-        self.dec4 = ConvBlock(c * 4 + c * 8, c * 4)
-        self.up3 = nn.ConvTranspose2d(c * 4, c * 2, 2, stride=2)
-        self.dec3 = ConvBlock(c * 2 + c * 4, c * 2)
-        self.up2 = nn.ConvTranspose2d(c * 2, c, 2, stride=2)
-        self.dec2 = ConvBlock(c + c * 2, c)
-        self.up1 = nn.ConvTranspose2d(c, c // 2, 2, stride=2)
-        self.dec1 = ConvBlock(c // 2 + c, c // 2)
+        # encoder:第 i 層通道 c*2^i(i=0..depth-1),第 0 層吃 3 通道輸入。
+        # depth=4 時等價於原寫死的 enc1..enc4(c, 2c, 4c, 8c)。
+        ch = [c * (2 ** i) for i in range(depth)]
+        self.encs = nn.ModuleList(
+            [ConvBlock(3 if i == 0 else ch[i - 1], ch[i]) for i in range(depth)]
+        )
+        self.bottleneck = ConvBlock(ch[-1], ch[-1])
+
+        # decoder:depth 個上採樣。第 t 步輸入通道 = ch[depth-1-t](t=0 來自 bottleneck),
+        # concat 對應 enc skip(同通道);輸出 target:前 depth-1 步=ch[depth-2-t],最後一步=c//2。
+        self.ups = nn.ModuleList()
+        self.decs = nn.ModuleList()
+        for t in range(depth):
+            in_ch = ch[depth - 1 - t]
+            skip_ch = ch[depth - 1 - t]
+            out_ch = ch[depth - 2 - t] if t < depth - 1 else c // 2
+            self.ups.append(nn.ConvTranspose2d(in_ch, out_ch, 2, stride=2))
+            self.decs.append(ConvBlock(out_ch + skip_ch, out_ch))
 
         # heads:從 schema 推導,key 與 schema 對齊
         self.head_convs = nn.ModuleDict(
@@ -70,16 +74,39 @@ class DefectSegNet(nn.Module):
         )
 
     def forward(self, x) -> dict[str, torch.Tensor]:
-        e1 = self.enc1(x)
-        e2 = self.enc2(self.pool(e1))
-        e3 = self.enc3(self.pool(e2))
-        e4 = self.enc4(self.pool(e3))
-        b = self.bottleneck(self.pool(e4))
-        d4 = self.dec4(torch.cat([self.up4(b), e4], dim=1))
-        d3 = self.dec3(torch.cat([self.up3(d4), e3], dim=1))
-        d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))
-        d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
-        return {key: conv(d1) for key, conv in self.head_convs.items()}
+        skips = []
+        h = x
+        for i, enc in enumerate(self.encs):
+            h = enc(h if i == 0 else self.pool(h))
+            skips.append(h)
+        h = self.bottleneck(self.pool(h))
+        for t, (up, dec) in enumerate(zip(self.ups, self.decs)):
+            skip = skips[self.depth - 1 - t]
+            h = dec(torch.cat([up(h), skip], dim=1))
+        return {key: conv(h) for key, conv in self.head_convs.items()}
+
+
+def load_state_dict_flexible(model: DefectSegNet, sd: dict) -> None:
+    """載入 state_dict;若是舊版寫死命名(enc1/up4/dec4...)自動 remap 成 ModuleList 命名。
+
+    舊→新(僅 depth=4 的舊 checkpoint):enc{1..4}→encs.{0..3}、up{4,3,2,1}→ups.{0..3}、
+    dec{4,3,2,1}→decs.{0..3};bottleneck / head_convs 不變。
+    """
+    if any(k.startswith("encs.") for k in sd):
+        model.load_state_dict(sd)
+        return
+    remap = {}
+    enc_map = {"enc1": "encs.0", "enc2": "encs.1", "enc3": "encs.2", "enc4": "encs.3"}
+    up_map = {"up4": "ups.0", "up3": "ups.1", "up2": "ups.2", "up1": "ups.3"}
+    dec_map = {"dec4": "decs.0", "dec3": "decs.1", "dec2": "decs.2", "dec1": "decs.3"}
+    pref = {**enc_map, **up_map, **dec_map}
+    for k, v in sd.items():
+        head = k.split(".", 1)[0]
+        if head in pref:
+            remap[k.replace(head, pref[head], 1)] = v
+        else:
+            remap[k] = v
+    model.load_state_dict(remap)
 
 
 if __name__ == "__main__":

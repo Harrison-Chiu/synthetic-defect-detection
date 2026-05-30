@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 class TrainConfig:
     # 模型
     base_c: int = 32
+    depth: int = 4               # encoder/decoder 層數(下採樣次數);縮小模型的第二軸
 
     # 優化
     seed: int = 42

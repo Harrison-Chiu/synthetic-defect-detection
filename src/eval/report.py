@@ -329,7 +329,7 @@ def build_report(run_dir: str | Path, n_scenes: int = 100) -> Path:
     import matplotlib
     matplotlib.use("Agg")
     import torch
-    from src.models import DefectSegNet
+    from src.models import DefectSegNet, load_state_dict_flexible
 
     run_dir = Path(run_dir)
     tag = run_dir.name
@@ -343,11 +343,12 @@ def build_report(run_dir: str | Path, n_scenes: int = 100) -> Path:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     base_c = train_cfg.get("base_c", 32)
+    depth = train_cfg.get("depth", 4)
     defect_thr = train_cfg.get("defect_thr", 0.5)
-    model = DefectSegNet(base_c=base_c).to(device)
+    model = DefectSegNet(base_c=base_c, depth=depth).to(device)
     if ckpt.get("state_dict"):
-        model.load_state_dict(ckpt["state_dict"])
-    print(f"[report] {tag}: 生成 {n_scenes} 張 test 場景跑模型 (base_c={base_c}) ...")
+        load_state_dict_flexible(model, ckpt["state_dict"])
+    print(f"[report] {tag}: 生成 {n_scenes} 張 test 場景跑模型 (base_c={base_c} depth={depth}) ...")
     cache = _build_cache(model, device, n_scenes, defect_thr)
     m = _metrics_from_cache(cache)
 
@@ -416,7 +417,7 @@ def build_report(run_dir: str | Path, n_scenes: int = 100) -> Path:
 </style></head><body>
 <h1>Run Report — <code>{tag}</code></h1>
 <p class="note">由 <code>cli.py report</code> 自動產生({split_name} set,{n_scenes} 張)。
- best val mIoU=<b>{best_miou:.3f}</b>｜base_c={base_c}｜defect_thr={defect_thr}</p>
+ best val mIoU=<b>{best_miou:.3f}</b>｜base_c={base_c}｜depth={depth}｜defect_thr={defect_thr}</p>
 
 <h2>1. KPI(對 S3 baseline)</h2>
 <table><tr><th>指標</th><th class="num">S3</th><th class="num">本 run</th></tr>{kpi}</table>
