@@ -58,11 +58,17 @@ segnet enc/dec → ModuleList + `depth` 參數;depth=4 與原架構參數完全�
 ### 選定 headline 模型:base_c=8 / depth=4 / pos_weight=5 / thr=0.7(defIoU 0.385)
 depth=3 為「極小版」備選(52K)。
 
-### 下一步
-1. 🔄 **長版 15000 步(5×)** s5_long(看過擬合拐點)`output/s5_long.log`。
-2. ⬜ 用 thr=0.7 統一重生所有 report;彙整最終報告數字。
-3. ⬜ `.ipynb` 繳交橋(6/2)。
-- ⬜ w_norm 旋鈕未 plumb(pw5+thr0.7 已勝 S3,優先度低);S3 的 A 圖(資料特性)未進 report。
+### 長版 15000 步(s5_long, pw5/thr0.7):★ 沒有過擬合 ★
+- train/val loss 全程同步、雙雙平台化,val 從不回升 → **無過擬合**(runtime 生成=等效無限資料,
+  無固定訓練集可記憶)。**收斂平台 ~step 5000-7000(best@6800)→ 實際需要步數 ≈ 5000-6000**;3000 略欠訓。
+- **最終 headline(test, pw5, thr0.7):mIoU 0.721(S3 0.712)、pixel_acc 94.1%、defect IoU 0.39(S3 0.362)✓、
+  remesh inst IoU 0.491(S3 0.276)。bend 仍 floor(本質弱,已坐實)。**
+
+### S5 實驗階段 ≈ 收斂,剩報告/交付
+1. ⬜ 用 thr=0.7 統一重生所有 report(舊 width 掃 run 存的是 thr0.5);可加 build_report thr 參數。
+2. ⬜ **`.ipynb` 繳交橋(6/2 截止,優先度↑)**:薄 notebook import src + 跑 cli。
+3. ⬜ 最終報告敘事彙整(飽和/深度>寬度/FP-thr/無過擬合/bend 誠實面)。
+- ⬜ (低優)w_norm 旋鈕未 plumb;S3 的 A 圖(資料特性)未進 report。
 
 ### 已結案(歸檔 `docs/history/refactor_and_s4_review.md`)
 - **程式大重構**(src/ 分層 + runtime 生成 + cli + output 角色分類)。
