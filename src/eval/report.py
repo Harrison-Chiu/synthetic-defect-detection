@@ -43,9 +43,9 @@ def _fig_to_b64(fig) -> str:
 # ── 跑模型 → cache ─────────────────────────────────────────
 def _build_cache(model, device, n: int, defect_thr: float):
     import torch
-    from src.data import encode_rgb, generate_scene, load_assets
+    from src.data import encode_rgb, encode_targets, generate_scene, load_assets
     from src.data.config import DEFAULT_CONFIG, TEST_INDEX_OFFSET
-    from src.eval.metrics import infer_3class
+    from src.eval.metrics import _DEFECT_KEY, infer_3class
 
     assets = load_assets()
     cache = []
@@ -56,12 +56,19 @@ def _build_cache(model, device, n: int, defect_thr: float):
             rgb_t = encode_rgb(s.rgb).unsqueeze(0).to(device)
             out = model(rgb_t)
             pred, ppart, pdef = infer_3class(out, defect_thr)
+            tg = encode_targets(s.semantic, s.instance, s.meta, s.defect_region)
+            dl = out[_DEFECT_KEY]
+            if dl.dim() == 4:
+                dl = dl.squeeze(1)
             cache.append({
                 "rgb": s.rgb,
                 "gt": s.semantic.astype(np.uint8),
                 "pred": pred[0].cpu().numpy().astype(np.uint8),
                 "p_part": ppart[0].cpu().numpy(),
                 "p_def": pdef[0].cpu().numpy(),
+                "def_logit": dl[0].cpu().numpy(),       # defect 頭原始 logit(算 per-type BCE)
+                "T": tg["B_T"].numpy(),                 # defect target(變形區)
+                "W": tg["B_W"].numpy(),                 # defect 權重
                 "instance": s.instance,
                 "meta": s.meta,
             })
@@ -117,7 +124,8 @@ def _fig_pred_panel(cache, k=3):
         axes = axes[None, :]
     for r, c in enumerate(sel):
         axes[r, 0].imshow(c["rgb"]); axes[r, 0].set_title("RGB", fontsize=9)
-        axes[r, 1].imshow(_CMAP3[c["gt"]]); axes[r, 1].set_title("GT", fontsize=9)
+        axes[r, 1].imshow(_CMAP3[c["gt"]]); axes[r, 1].set_title("GT (標 type)", fontsize=9)
+        _label_instances(axes[r, 1], c)
         axes[r, 2].imshow(_CMAP3[c["pred"]]); axes[r, 2].set_title("Pred", fontsize=9)
         im = axes[r, 3].imshow(c["p_def"], cmap="hot", vmin=0, vmax=1)
         axes[r, 3].set_title("P(defect)", fontsize=9)
@@ -161,7 +169,8 @@ def _fig_fpfn(cache):
         c = cache[s["i"]]
         sub = f"TP={s['tp']} FP={s['fp']} FN={s['fn']}"
         axes[r, 0].imshow(c["rgb"]); axes[r, 0].set_title(title, fontsize=9)
-        axes[r, 1].imshow(_CMAP3[c["gt"]]); axes[r, 1].set_title("GT", fontsize=9)
+        axes[r, 1].imshow(_CMAP3[c["gt"]]); axes[r, 1].set_title("GT (標 type)", fontsize=9)
+        _label_instances(axes[r, 1], c)
         axes[r, 2].imshow(_CMAP3[c["pred"]]); axes[r, 2].set_title("Pred " + sub, fontsize=8)
         axes[r, 3].imshow(overlay(c["rgb"], c["gt"], c["pred"]))
         axes[r, 3].set_title("綠=TP 紅=FP 橘=FN", fontsize=9)
@@ -232,6 +241,89 @@ def _fig_inst_box(cache):
     return _fig_to_b64(fig), by
 
 
+_TYPES = ("bend", "displace", "remesh")
+
+
+def _per_type_stats(cache):
+    """三種瑕疵 type(bend/displace/remesh)各自:偵測率、per-instance IoU、defect 頭 BCE。
+
+    - det_rate:該 type 零件像素被判 defect 的比例。
+    - inst_iou:該 type 每顆瑕疵零件的 defect IoU(pred==2 vs 整顆),取平均。
+    - bce:defect 頭在「該 type 零件所屬像素」上的加權 BCE(W·BCE / ΣW),反映 loss 貢獻。
+    """
+    from src import schema
+    agg = {t: {"det": [0, 0], "iou": [], "bce_num": 0.0, "bce_den": 0.0} for t in _TYPES}
+    for c in cache:
+        pd = c["pred"] == 2
+        # 逐像素 BCE map(對 T,以 sigmoid logit)
+        z = c["def_logit"]
+        p = 1.0 / (1.0 + np.exp(-z))
+        eps = 1e-6
+        bce_map = -(c["T"] * np.log(p + eps) + (1 - c["T"]) * np.log(1 - p + eps))
+        for ins in c["meta"]["instances"]:
+            if not ins["is_defective"]:
+                continue
+            t = schema.state_to_type(ins["defect_state"])
+            if t not in agg:
+                continue
+            pix = c["instance"] == ins["instance_id"]
+            ps = int(pix.sum())
+            if ps < 50:
+                continue
+            agg[t]["det"][0] += int((pd & pix).sum())
+            agg[t]["det"][1] += ps
+            inter = int((pd & pix).sum()); union = int((pd | pix).sum())
+            if union > 0:
+                agg[t]["iou"].append(inter / union)
+            w = c["W"][pix]
+            agg[t]["bce_num"] += float((w * bce_map[pix]).sum())
+            agg[t]["bce_den"] += float(w.sum())
+    out = {}
+    for t in _TYPES:
+        a = agg[t]
+        out[t] = {
+            "det_rate": a["det"][0] / a["det"][1] if a["det"][1] else float("nan"),
+            "inst_iou": float(np.mean(a["iou"])) if a["iou"] else float("nan"),
+            "bce": a["bce_num"] / a["bce_den"] if a["bce_den"] else float("nan"),
+            "n_inst": len(a["iou"]),
+        }
+    return out
+
+
+def _fig_per_type(pt):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    x = np.arange(len(_TYPES)); w = 0.27
+    det = [pt[t]["det_rate"] for t in _TYPES]
+    iou = [pt[t]["inst_iou"] for t in _TYPES]
+    bce = [pt[t]["bce"] for t in _TYPES]
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+    ax[0].bar(x - w/2, det, w, label="偵測率", color="#2a4d8f")
+    ax[0].bar(x + w/2, iou, w, label="inst IoU", color="#c0392b")
+    ax[0].set_xticks(x); ax[0].set_xticklabels(_TYPES); ax[0].set_ylim(0, 1.02)
+    ax[0].set_title("三種瑕疵:偵測率 / per-instance IoU"); ax[0].legend(); ax[0].grid(axis="y", alpha=.3)
+    ax[1].bar(x, bce, color="#d4a017")
+    ax[1].set_xticks(x); ax[1].set_xticklabels(_TYPES)
+    ax[1].set_title("三種瑕疵:defect 頭加權 BCE(越低越好)"); ax[1].grid(axis="y", alpha=.3)
+    plt.tight_layout()
+    return _fig_to_b64(fig)
+
+
+def _label_instances(ax, c):
+    """在每顆瑕疵零件質心標注 defect type。"""
+    from src import schema
+    for ins in c["meta"]["instances"]:
+        if not ins["is_defective"]:
+            continue
+        ys, xs = np.where(c["instance"] == ins["instance_id"])
+        if len(xs) == 0:
+            continue
+        t = schema.state_to_type(ins["defect_state"])
+        ax.text(xs.mean(), ys.mean(), t, color="yellow", fontsize=7, ha="center", va="center",
+                bbox=dict(boxstyle="round,pad=0.1", fc="black", alpha=0.5, ec="none"))
+
+
 # ── 主入口 ─────────────────────────────────────────────────
 def build_report(run_dir: str | Path, n_scenes: int = 100) -> Path:
     import matplotlib
@@ -265,6 +357,8 @@ def build_report(run_dir: str | Path, n_scenes: int = 100) -> Path:
     fpfn = _fig_fpfn(cache)
     conf = _fig_confusion(cache)
     box, by_state = _fig_inst_box(cache)
+    pt = _per_type_stats(cache)
+    pt_fig = _fig_per_type(pt)
 
     def img(b64, cap):
         return (f'<figure><img src="data:image/png;base64,{b64}"/><figcaption>{cap}</figcaption></figure>'
@@ -280,6 +374,12 @@ def build_report(run_dir: str | Path, n_scenes: int = 100) -> Path:
             ("bg IoU", "0.983", f"{m['IoU'][0]:.3f}"),
             ("normal IoU", "0.790", f"{m['IoU'][1]:.3f}"),
         ])
+
+    # 三種瑕疵 type 表(bend/displace/remesh)
+    pt_rows = "".join(
+        f"<tr><td>{t}</td><td class='num'>{pt[t]['det_rate']*100:.1f}%</td>"
+        f"<td class='num'>{pt[t]['inst_iou']:.3f}</td><td class='num'>{pt[t]['bce']:.3f}</td>"
+        f"<td class='num'>{pt[t]['n_inst']}</td></tr>" for t in _TYPES)
 
     # per-state 偵測率(從 cache 算)
     from src import schema
@@ -321,16 +421,19 @@ def build_report(run_dir: str | Path, n_scenes: int = 100) -> Path:
 <h2>1. KPI(對 S3 baseline)</h2>
 <table><tr><th>指標</th><th class="num">S3</th><th class="num">本 run</th></tr>{kpi}</table>
 
-<h2>2. 訓練曲線</h2>{img(curves, "train/val loss、per-class val IoU、lr")}
-<h2>3. 預測面板</h2>{img(panel, "RGB | GT | Pred | P(defect)")}
-<h2>4. FP / FN 案例</h2>{img(fpfn, "綠=TP 紅=FP(誤報) 橘=FN(漏抓)")}
-<h2>5. per-state 混淆矩陣</h2>{img(conf, "每種 defect_state 的零件像素被判成哪一類")}
-<h2>6. per-instance defect IoU</h2>{img(box, "每顆瑕疵零件的 defect IoU 分布(按 state)")}
+<h2>2. 三種瑕疵各自表現(bend / displace / remesh)</h2>
+<table><tr><th>defect type</th><th class="num">偵測率</th><th class="num">inst IoU</th><th class="num">defect BCE</th><th class="num">n_inst</th></tr>{pt_rows}</table>
+{img(pt_fig, "三種瑕疵:偵測率/IoU(左)、defect 頭加權 BCE(右)")}
+<h2>3. 訓練曲線</h2>{img(curves, "train/val loss、per-class val IoU、lr")}
+<h2>4. 預測面板</h2>{img(panel, "RGB | GT(標 type) | Pred | P(defect)")}
+<h2>5. FP / FN 案例</h2>{img(fpfn, "綠=TP 紅=FP(誤報) 橘=FN(漏抓);GT 欄標 type")}
+<h2>6. per-state 混淆矩陣</h2>{img(conf, "每種 defect_state 的零件像素被判成哪一類")}
+<h2>7. per-instance defect IoU</h2>{img(box, "每顆瑕疵零件的 defect IoU 分布(按 state)")}
 
-<h2>7. per-state 偵測率表</h2>
+<h2>8. per-state 偵測率表</h2>
 <table><tr><th>defect_state</th><th class="num">偵測率</th><th class="num">inst IoU</th><th class="num">n_px</th></tr>{ps_rows}</table>
 
-<h2>8. 訓練設定(TrainConfig)</h2><table><tr><th>參數</th><th class="num">值</th></tr>{cfg_rows}</table>
+<h2>9. 訓練設定(TrainConfig)</h2><table><tr><th>參數</th><th class="num">值</th></tr>{cfg_rows}</table>
 </body></html>"""
 
     out = run_dir / "report.html"
