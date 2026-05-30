@@ -65,39 +65,50 @@ def cmd_samples(args):
 
 # ── train ──────────────────────────────────────────────────
 def cmd_train(args):
+    import dataclasses
+
     import torch
     from torch.utils.data import DataLoader
 
-    from src.data import RuntimeSceneDataset, EvalSetDataset, load_assets
-    from src.data.config import DEFAULT_CONFIG
+    from src.data import RuntimeSceneDataset, load_assets
+    from src.data.config import DEFAULT_CONFIG, EVAL_INDEX_OFFSET, TEST_INDEX_OFFSET
     from src.models import DefectSegNet
     from src.train import DEFAULT_TRAIN_CONFIG, train_loop
-
-    eval_dir = Path(args.eval_set)
-    if not eval_dir.exists():
-        sys.exit(f"找不到 eval set:{eval_dir}\n請先跑 `python cli.py freeze-eval`")
 
     device = _device(args.device)
     gen_cfg = DEFAULT_CONFIG
     train_cfg = DEFAULT_TRAIN_CONFIG
+    _overrides = {k: v for k, v in (("base_c", args.base_c),
+                                    ("total_steps", args.total_steps),
+                                    ("eval_every", args.eval_every)) if v is not None}
+    if _overrides:
+        train_cfg = dataclasses.replace(train_cfg, **_overrides)
+    workers = args.workers if args.workers is not None else train_cfg.num_workers
     run_dir = Path(args.runs) / args.tag
+    n_eval = args.n_eval
 
     assets = load_assets()
     train_len = train_cfg.total_steps * train_cfg.batch_size
+    # val / test 皆 runtime 生成(與訓練 0 起算 disjoint;val 與凍結 eval_set 同場景,
+    # 但帶 defect_region → 可算 val loss）。test 在獨立高位區段,只報數字。
     train_ds = RuntimeSceneDataset(length=train_len, assets=assets, config=gen_cfg, index_offset=0)
-    eval_ds = EvalSetDataset(eval_dir)
-    train_loader = DataLoader(train_ds, batch_size=train_cfg.batch_size, shuffle=False,
-                              num_workers=args.workers)
-    eval_loader = DataLoader(eval_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=0)
+    val_ds = RuntimeSceneDataset(length=n_eval, assets=assets, config=gen_cfg, index_offset=EVAL_INDEX_OFFSET)
+    test_ds = RuntimeSceneDataset(length=n_eval, assets=assets, config=gen_cfg, index_offset=TEST_INDEX_OFFSET)
+    train_loader = DataLoader(train_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=workers)
+    val_loader = DataLoader(val_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=workers)
+    test_loader = DataLoader(test_ds, batch_size=train_cfg.batch_size, shuffle=False, num_workers=workers)
 
-    # 固定快照批:取 eval set 前幾張
-    n_snap = min(4, len(eval_ds))
-    snap_batch = torch.stack([eval_ds[i][0] for i in range(n_snap)]) if n_snap else None
+    # 固定快照批:取 val set 前幾張
+    n_snap = min(4, n_eval)
+    snap_batch = torch.stack([val_ds[i][0] for i in range(n_snap)]) if n_snap else None
 
     model = DefectSegNet(base_c=train_cfg.base_c)
-    print(f"train tag={args.tag} device={device} run_dir={run_dir}")
-    _, best = train_loop(model, train_loader, eval_loader, device, run_dir, train_cfg, snap_batch)
-    print(f"best val mIoU={best['best_val_miou']:.3f}  test mIoU={best['test_metrics']['mIoU']:.3f}")
+    print(f"train tag={args.tag} device={device} base_c={train_cfg.base_c} "
+          f"workers={workers} run_dir={run_dir}")
+    _, best = train_loop(model, train_loader, val_loader, device, run_dir, train_cfg,
+                         snap_batch, test_loader=test_loader)
+    print(f"best val mIoU={best['best_val_miou']:.3f}  test mIoU={best['test_metrics']['mIoU']:.3f}  "
+          f"test defectIoU={best['test_metrics']['IoU_per_class'][2]:.3f}")
 
 
 # ── eval ───────────────────────────────────────────────────
@@ -129,9 +140,9 @@ def cmd_eval(args):
     print(f"pixel_acc={m['pixel_acc']*100:.2f}%  mIoU={m['mIoU']:.3f}")
     for c, name in enumerate(["background", "normal_part", "defective_part"]):
         print(f"  {name:18s} IoU={m['IoU_per_class'][c]:.3f}")
-    print("per-state IoU (head B):")
-    for c, iou in enumerate(per_state):
-        print(f"  {schema.STATE_CLASSES[c]:18s} IoU={iou:.3f}")
+    print("per-state(偵測率 / defect IoU):")
+    for name, d in per_state.items():
+        print(f"  {name:18s} det={d['det_rate']*100:5.1f}%  IoU={d['iou']:.3f}  (n={d['n_px']})")
 
 
 # ── render(Blender 側,shell out)+ gen-backgrounds(純 conda)──
@@ -186,10 +197,13 @@ def build_parser():
 
     pt = sub.add_parser("train", help="step-based 訓練")
     pt.add_argument("--tag", required=True, help="run 標籤(輸出到 runs/<tag>/)")
-    pt.add_argument("--eval-set", default=str(DEFAULT_EVAL_SET))
     pt.add_argument("--runs", default=str(DEFAULT_RUNS))
     pt.add_argument("--device", default="auto")
-    pt.add_argument("--workers", type=int, default=0)
+    pt.add_argument("--workers", type=int, default=None, help="DataLoader workers(預設取 TrainConfig=8)")
+    pt.add_argument("--base-c", type=int, default=None, help="覆寫 base_c(base_c 掃描用)")
+    pt.add_argument("--total-steps", type=int, default=None, help="覆寫 total_steps")
+    pt.add_argument("--eval-every", type=int, default=None, help="覆寫 eval_every")
+    pt.add_argument("--n-eval", type=int, default=100, help="val/test 各幾張(runtime 生成)")
     pt.set_defaults(func=cmd_train)
 
     pv = sub.add_parser("eval", help="在 eval set 上評估某個 run")

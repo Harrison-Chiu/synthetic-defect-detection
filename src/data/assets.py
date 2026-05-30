@@ -61,12 +61,23 @@ def load_part_index_by_hdri(parts_dir: str | os.PathLike = DEFAULT_PARTS_DIR):
             continue
         key = "defect" if state_dir in DEFECT_STATES_DEFECTIVE else "normal"
         for png in sorted(glob.glob(os.path.join(full, "*.png"))):
+            if png.endswith("_defectmask.png"):
+                continue  # S5 離線產的變形區遮罩,不是零件 patch
             h = _hdri_idx_from_filename(png)
             buckets.setdefault(h, {"normal": [], "defect": []})
             buckets[h][key].append((png, state_dir))
     if not buckets:
         raise FileNotFoundError(f"在 {parts_dir} 找不到任何零件 patch")
     return buckets
+
+
+def defectmask_path_for(part_path: str) -> str:
+    """由 defect patch 路徑推出對應的變形區遮罩路徑(gen_defectmask.py 產)。
+
+    `.../<state>/<pose>_<state>.png` → `.../<state>/<pose>_<state>_defectmask.png`
+    normal patch 無變形區,呼叫端自行判斷(is_defective)後才查。
+    """
+    return part_path[:-4] + "_defectmask.png"
 
 
 def load_background_pools(

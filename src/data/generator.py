@@ -35,14 +35,18 @@ from src.data.config import (
 class SceneSample:
     """一張當場生成的場景(記憶體,不落地)。
 
-    rgb:      (H, W, 3) uint8
-    semantic: (H, W)    uint8  0=bg / 1=normal / 2=defect(與 Stage 3 schema 可比)
-    instance: (H, W)    uint8  0=bg / 1..N=instance id
-    meta:     dict      含 instances[](每個有 defect_state),供 schema 編碼 label
+    rgb:           (H, W, 3) uint8
+    semantic:      (H, W)    uint8  0=bg / 1=normal / 2=defect(與 Stage 3 schema 可比)
+    instance:      (H, W)    uint8  0=bg / 1..N=instance id
+    defect_region: (H, W)    uint8  0/1  壞件的「變形區」(S5:normal vs defect 相減,
+                                          隨零件同變換貼進場景);好件/背景=0。
+                                          供 encode_targets 組 defect 頭的 T/W。
+    meta:          dict      含 instances[](每個有 defect_state),供 schema 編碼 label
     """
     rgb: np.ndarray
     semantic: np.ndarray
     instance: np.ndarray
+    defect_region: np.ndarray
     meta: dict
 
 
@@ -178,6 +182,17 @@ def _transform_part(rgba, cfg, rng):
     return np.array(img), scale, rot
 
 
+def _apply_rot_scale_mask(mask: np.ndarray, rot: float, scale: float) -> np.ndarray:
+    """對單通道遮罩套用與 _transform_part 完全相同的 rot+scale(NEAREST 保二值)。
+
+    與 rgba 同原始尺寸 + 同 rot → expand 後尺寸一致 → 後續 bbox 裁切座標對齊。
+    """
+    img = Image.fromarray(mask, mode="L").rotate(rot, resample=Image.NEAREST, expand=True)
+    nw, nh = img.size
+    img = img.resize((max(1, int(nw * scale)), max(1, int(nh * scale))), Image.NEAREST)
+    return np.array(img)
+
+
 def _alpha_bbox(alpha, threshold=10):
     ys, xs = np.where(alpha > threshold)
     if len(xs) == 0:
@@ -212,6 +227,7 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
 
     semantic = np.zeros((S, S), dtype=np.uint8)
     instance = np.zeros((S, S), dtype=np.uint8)
+    defect_region = np.zeros((S, S), dtype=np.uint8)  # S5:壞件變形區(場景空間)
 
     # 3) 抽零件並逐一貼上
     n_parts = rng.randint(cfg.parts_range[0], cfg.parts_range[1] + 1)
@@ -220,7 +236,21 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
     placed_meta = []
     for inst_id, (part_path, defect_state) in enumerate(chosen, start=1):
         rgba = np.array(Image.open(part_path).convert("RGBA"))
+        is_defective = defect_state in DEFECT_STATES_DEFECTIVE
+
+        # S5:壞件載入對應變形區遮罩,套與零件相同的 rot+scale(同原點,已配準)
+        dmask_t = None
+        if is_defective:
+            from src.data.assets import defectmask_path_for
+            dpath = defectmask_path_for(part_path)
+            if os.path.exists(dpath):
+                dmask_raw = np.array(Image.open(dpath).convert("L"))
+            else:
+                dmask_raw = None  # 缺遮罩 → 該壞件變形區留空(退化成全 ignore)
+
         rgba, scale, rot = _transform_part(rgba, cfg, rng)
+        if is_defective and dmask_raw is not None:
+            dmask_t = _apply_rot_scale_mask(dmask_raw, rot, scale)
 
         bb = _alpha_bbox(rgba[:, :, 3])
         if bb is None:
@@ -230,6 +260,7 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
         if part_w < 4 or part_h < 4:
             continue
         part_crop = rgba[by0:by1, bx0:bx1]
+        dmask_crop = dmask_t[by0:by1, bx0:bx1] if dmask_t is not None else None
 
         cx, cy = rng.randint(0, S), rng.randint(0, S)
         px, py = cx - part_w // 2, cy - part_h // 2
@@ -249,9 +280,13 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
         canvas[y_a:y_b, x_a:x_b] = np.clip(blended, 0, 255).astype(np.uint8)
 
         is_part = sub_alpha > 0.5
-        cls_val = CLS_DEFECT if defect_state in DEFECT_STATES_DEFECTIVE else CLS_NORMAL
+        cls_val = CLS_DEFECT if is_defective else CLS_NORMAL
         semantic[y_a:y_b, x_a:x_b][is_part] = cls_val
         instance[y_a:y_b, x_a:x_b][is_part] = inst_id
+        if dmask_crop is not None:
+            sub_dmask = dmask_crop[cy0:cy1, cx0:cx1]  # 對齊 sub_rgba 的子裁切
+            hit = (sub_dmask > 127) & is_part         # 變形區 ∩ 零件像素
+            defect_region[y_a:y_b, x_a:x_b][hit] = 1
 
         placed_meta.append({
             "instance_id": inst_id,
@@ -275,7 +310,8 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
         "n_parts": len(placed_meta),
         "n_defective": sum(1 for m in placed_meta if m["is_defective"]),
     }
-    return SceneSample(rgb=canvas, semantic=semantic, instance=instance, meta=meta)
+    return SceneSample(rgb=canvas, semantic=semantic, instance=instance,
+                       defect_region=defect_region, meta=meta)
 
 
 def write_scene(sample: SceneSample, scene_dir: str | os.PathLike) -> None:
@@ -291,6 +327,7 @@ def write_scene(sample: SceneSample, scene_dir: str | os.PathLike) -> None:
     Image.fromarray(sample.rgb).save(d / "rgb.png")
     Image.fromarray(sample.semantic).save(d / "semantic_mask.png")
     Image.fromarray(sample.instance).save(d / "instance_mask.png")
+    Image.fromarray((sample.defect_region * 255).astype(np.uint8), mode="L").save(d / "defect_region.png")
     with open(d / "meta.json", "w", encoding="utf-8") as f:
         json.dump(sample.meta, f, indent=2, ensure_ascii=False)
 

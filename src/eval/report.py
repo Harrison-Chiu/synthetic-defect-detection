@@ -41,8 +41,10 @@ def _curves_b64(history: dict) -> str | None:
     axes[0].plot(steps, history["val_mIoU"], "-o", label="mIoU", color="#2a4d8f")
     axes[0].plot(steps, history["val_IoU_defect"], "-o", label="defect IoU", color="#c0392b")
     axes[0].set_title("val mIoU / defect IoU"); axes[0].set_xlabel("step"); axes[0].legend()
-    axes[1].plot(steps, history["L_total"], "-o", color="#d4a017")
-    axes[1].set_title("train loss (L_total)"); axes[1].set_xlabel("step")
+    axes[1].plot(steps, history["L_total"], "-o", label="train", color="#d4a017")
+    if history.get("val_L_total"):
+        axes[1].plot(steps, history["val_L_total"], "-o", label="val", color="#8e44ad")
+    axes[1].set_title("loss (train vs val)"); axes[1].set_xlabel("step"); axes[1].legend()
     axes[2].plot(steps, history["lr"], "-o", color="#198754")
     axes[2].set_title("learning rate"); axes[2].set_xlabel("step"); axes[2].set_yscale("log")
     plt.tight_layout()
@@ -62,7 +64,8 @@ def build_report(run_dir: str | Path) -> Path:
     ckpt = torch.load(run_dir / "best.pt", map_location="cpu", weights_only=False) \
         if (run_dir / "best.pt").exists() else {}
     test = ckpt.get("test_metrics", {})
-    per_state = ckpt.get("per_state_iou", [])
+    per_state = ckpt.get("per_state", {})
+    split_name = ckpt.get("test_split", "test")
     train_cfg = ckpt.get("train_config", {})
     best_miou = ckpt.get("best_val_miou", float("nan"))
 
@@ -84,9 +87,10 @@ def build_report(run_dir: str | Path) -> Path:
         ])
 
     per_state_rows = "".join(
-        f"<tr><td>{schema.STATE_CLASSES[i]}</td><td class='num'>{v:.3f}</td></tr>"
-        for i, v in enumerate(per_state)) if per_state else \
-        "<tr><td colspan=2 class='note'>無 per-state IoU</td></tr>"
+        f"<tr><td>{name}</td><td class='num'>{d['det_rate']*100:.1f}%</td>"
+        f"<td class='num'>{d['iou']:.3f}</td><td class='num'>{d['n_px']}</td></tr>"
+        for name, d in per_state.items()) if per_state else \
+        "<tr><td colspan=4 class='note'>無 per-state 資料</td></tr>"
 
     cfg_rows = "".join(f"<tr><td>{k}</td><td class='num'>{v}</td></tr>"
                        for k, v in train_cfg.items()) or \
@@ -113,7 +117,7 @@ def build_report(run_dir: str | Path) -> Path:
 <p class="note">由 <code>cli.py report</code> 自動產生(通用報告)。資料來源:<code>{run_dir}</code></p>
 <h2>1. 最終指標</h2><table><tr><th>指標</th><th class="num">值</th></tr>{metrics_rows}</table>
 <h2>2. 訓練曲線</h2>{curves_html}
-<h2>3. Per-state IoU(head B,7 類)</h2><table><tr><th>defect_state</th><th class="num">IoU</th></tr>{per_state_rows}</table>
+<h2>3. Per-state 表現(偵測率 / defect IoU,{split_name} set)</h2><table><tr><th>defect_state</th><th class="num">偵測率</th><th class="num">defect IoU</th><th class="num">n_px</th></tr>{per_state_rows}</table>
 <h2>4. 預測快照</h2>{snap_html}
 <h2>5. 訓練設定(TrainConfig)</h2><table><tr><th>參數</th><th class="num">值</th></tr>{cfg_rows}</table>
 </body></html>"""

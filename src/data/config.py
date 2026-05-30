@@ -37,8 +37,17 @@ DEFECT_STATES_DEFECTIVE = frozenset({
 # ── index 區段保留 ──────────────────────────────────────────
 # scene(i) 是純函數,因此「index 互斥 = 場景互斥」。給 eval / samples 各保留高位
 # 區段,確保它們的場景永遠不會與訓練(從 0 起算)撞號 → 杜絕資料洩漏。
-EVAL_INDEX_OFFSET = 10_000_000     # 凍結 eval set 用
+EVAL_INDEX_OFFSET = 10_000_000     # val set 用(選 best;與訓練 0 起算互斥)
 SAMPLE_INDEX_OFFSET = 20_000_000   # 報告配圖用
+TEST_INDEX_OFFSET = 30_000_000     # 獨立 test set 用(報數字;與 val 互斥,S5 新增)
+
+
+# ── S5 defect 頭 target 編碼參數(label 幾何,非生成;見 stage5_plan.md §3)──
+# 變形區二值 mask(離線 gen_defectmask.py,thr=30)→ 場景空間後,在此組 T / W。
+DEFECT_DILATE_PX = 4      # D⁺ = 變形區膨脹(容忍帶:亮在附近也算對)
+DEFECT_GAUSS_SIGMA = 6.0  # 高斯權重 W 的 σ(向外淡出;太大會糊進內部讓 ignore 失效)
+DEFECT_W_NORM = 0.3       # 好件(normal part)像素的權重(逼模型學「好件→不該亮」)
+DEFECT_W_BG = 0.0         # 遠背景權重(0 = 完全不在意;壞件內部亦由高斯自然衰減到≈0)
 
 
 @dataclass(frozen=True)

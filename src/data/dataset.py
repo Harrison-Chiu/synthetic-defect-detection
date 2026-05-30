@@ -25,7 +25,10 @@ from torch.utils.data import Dataset
 
 from src import schema
 from src.data.assets import Assets, load_assets
-from src.data.config import DEFAULT_CONFIG, GenConfig
+from src.data.config import (
+    CLS_DEFECT, CLS_NORMAL, DEFAULT_CONFIG,
+    DEFECT_DILATE_PX, DEFECT_GAUSS_SIGMA, DEFECT_W_BG, DEFECT_W_NORM, GenConfig,
+)
 from src.data.generator import SceneSample, generate_scene
 
 
@@ -36,43 +39,81 @@ def encode_rgb(rgb: np.ndarray) -> torch.Tensor:
     return (t - 0.5) / 0.5
 
 
-def encode_targets(semantic: np.ndarray, instance: np.ndarray, meta: dict) -> dict[str, torch.Tensor]:
-    """依 schema.HEADS 產生每個 head 的 target tensor。
+def _dilate(mask: np.ndarray, px: int) -> np.ndarray:
+    if px <= 0 or not mask.any():
+        return mask.astype(bool)
+    try:
+        from scipy import ndimage
+        return ndimage.binary_dilation(mask, iterations=px)
+    except ImportError:
+        return mask.astype(bool)
 
-    - level=PIXEL 的 part head：(instance>0) → 0/1 dense mask。
-    - level=INSTANCE 的 state/type head：每實例一個標籤,廣播到該實例像素,
-      實例外填 ignore_index。
+
+def _gaussian(x: np.ndarray, sigma: float) -> np.ndarray:
+    if sigma <= 0:
+        return x
+    try:
+        from scipy import ndimage
+        return ndimage.gaussian_filter(x, sigma=sigma)
+    except ImportError:
+        return x
+
+
+def encode_targets(
+    semantic: np.ndarray,
+    instance: np.ndarray,
+    meta: dict,
+    defect_region: np.ndarray | None = None,
+) -> dict[str, torch.Tensor]:
+    """產生 S5 雙頭的 target + eval 所需的輔助 GT。
+
+    回傳 dict:
+      - "A"        part head GT,(H,W) int64,0=bg / 1=part(CE)。
+      - "B_T"      defect 頭 soft target T,(H,W) float32:變形區膨脹帶=1,其餘=0
+                   (壞件內部/背景的值無所謂,因 W≈0)。
+      - "B_W"      defect 頭權重 W,(H,W) float32 = max(Gauss(D⁺,σ), w_norm·N);
+                   遠背景 & 壞件內部 → ≈0(= ignore,**由高斯自然衰減,非硬條件**)。
+      - "sem3"     eval 用 3-class GT,(H,W) int64,0=bg/1=normal/2=defect(整顆壞件)。
+      - "state_px" eval 用 per-pixel state idx,(H,W) int64,零件外 = IGNORE_INDEX。
+
+    defect_region 缺省(disk eval set 未存)→ T/W 退化為全 0(eval 不吃 T/W)。
     """
     part_mask = (instance > 0).astype(np.int64)
+    sem3 = semantic.astype(np.int64)
+    N = (semantic == CLS_NORMAL)  # 好件剪影(逼模型學「好件→不該亮」)
 
-    # 預建 instance → state/type idx 查表
-    state_full = np.full(instance.shape, schema.IGNORE_INDEX, dtype=np.int64)
-    type_full = np.full(instance.shape, schema.IGNORE_INDEX, dtype=np.int64)
+    # ── defect 頭 T / W ──
+    if defect_region is None:
+        D = np.zeros(semantic.shape, dtype=bool)
+    else:
+        D = defect_region.astype(bool)
+    D_plus = _dilate(D, DEFECT_DILATE_PX)
+    T = D_plus.astype(np.float32)
+    w_gauss = _gaussian(D_plus.astype(np.float32), DEFECT_GAUSS_SIGMA)
+    if w_gauss.max() > 0:
+        w_gauss = w_gauss / w_gauss.max()  # 正規化到 [0,1],變形區中心≈1
+    W = np.maximum(w_gauss, DEFECT_W_NORM * N.astype(np.float32))
+    W = np.maximum(W, DEFECT_W_BG)  # 背景底權重(預設 0)
+
+    # ── eval per-state(從 meta 重建,不再是訓練頭)──
+    state_px = np.full(instance.shape, schema.IGNORE_INDEX, dtype=np.int64)
     for ins in meta["instances"]:
-        iid = ins["instance_id"]
-        pix = instance == iid
-        if not pix.any():
-            continue
-        s_idx = schema.STATE_TO_IDX[ins["defect_state"]]
-        state_full[pix] = s_idx
-        type_full[pix] = schema.state_idx_to_type_idx(s_idx)
+        pix = instance == ins["instance_id"]
+        if pix.any():
+            state_px[pix] = schema.STATE_TO_IDX[ins["defect_state"]]
 
-    by_name = {
-        "part": torch.from_numpy(part_mask),
-        "state": torch.from_numpy(state_full),
-        "type": torch.from_numpy(type_full),
+    return {
+        "A": torch.from_numpy(part_mask),
+        "B_T": torch.from_numpy(T),
+        "B_W": torch.from_numpy(W),
+        "sem3": torch.from_numpy(sem3),
+        "state_px": torch.from_numpy(state_px),
     }
-    # 以 head.key 為鍵回傳,與 model.forward 輸出對齊
-    out = {}
-    for h in schema.HEADS:
-        if h.name not in by_name:
-            raise KeyError(f"encode_targets 沒有對應 head {h.name!r} 的編碼邏輯")
-        out[h.key] = by_name[h.name]
-    return out
 
 
 def sample_to_tensors(sample: SceneSample):
-    return encode_rgb(sample.rgb), encode_targets(sample.semantic, sample.instance, sample.meta)
+    return encode_rgb(sample.rgb), encode_targets(
+        sample.semantic, sample.instance, sample.meta, sample.defect_region)
 
 
 # ── 訓練:runtime 生成 ──────────────────────────────────────
@@ -125,9 +166,12 @@ class EvalSetDataset(Dataset):
         rgb = np.array(Image.open(d / "rgb.png").convert("RGB"))
         semantic = np.array(Image.open(d / "semantic_mask.png"))
         instance = np.array(Image.open(d / "instance_mask.png"))
+        dr_path = d / "defect_region.png"
+        defect_region = (np.array(Image.open(dr_path).convert("L")) > 127).astype(np.uint8) \
+            if dr_path.exists() else None
         with open(d / "meta.json", encoding="utf-8") as f:
             meta = json.load(f)
-        return encode_rgb(rgb), encode_targets(semantic, instance, meta)
+        return encode_rgb(rgb), encode_targets(semantic, instance, meta, defect_region)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,15 @@
 """
-losses.py — schema 驅動的多頭 loss
+losses.py — S5 雙頭 loss(part CE + defect 加權 BCE+Dice)
 
-移植 train_stage4.py 的 multiclass_dice_loss + three_head_loss,但泛化成
-「掃 schema.HEADS,每個 head 依其 `losses` 套 CE / Dice,加權求和」。
-新增/改 head 只動 schema,loss 自動跟上;權重數值在 TrainConfig。
+S5 機制(見 docs/stage5_plan.md §3):
+- **part 頭(A)**:逐像素 CE,part/bg,與 S3 相同。
+- **defect 頭(B,單通道 sigmoid)**:對 soft target T 套 **加權** BCE + **加權** soft-Dice,
+  權重圖 W 來自 encode_targets(變形區附近高、壞件內部/遠背景≈0)。
+  「interior ignore」就靠 W≈0 自然達成 —— loss 在那些像素貢獻趨零,矛盾消失。
+  pos_weight ρ 補變形區正類稀少(bend_light 僅 ~5%)。
 
-注意:這裡正是 schema guardrail 警告的所在 —— instance head(state/type)目前
-仍套逐像素 CE+Dice(忠實沿用 S4)。要改成 instance-level 監督是 S5 的事。
+相對 S4 multihead_loss:拿掉 state/type(已否決),defect 改單通道加權路徑。
+數值權重(head_weights / pos_weight)由 TrainConfig 注入。
 """
 
 from __future__ import annotations
@@ -16,58 +19,59 @@ import torch.nn.functional as F
 
 from src import schema
 
+_EPS = 1e-6
 
-def multiclass_dice_loss(logits, target, is_part_mask, num_classes, eps=1e-6):
-    """Macro per-class Dice,只在零件像素上計算(移植自 S4)。"""
-    probs = F.softmax(logits, dim=1)
-    is_part = is_part_mask.float().unsqueeze(1)
-    target_clamped = target.clone()
-    target_clamped[target_clamped < 0] = 0
-    onehot = F.one_hot(target_clamped, num_classes).permute(0, 3, 1, 2).float()
-    probs = probs * is_part
-    onehot = onehot * is_part
-    dims = (0, 2, 3)
-    inter = (probs * onehot).sum(dims)
-    denom = probs.sum(dims) + onehot.sum(dims)
-    dice = (2 * inter + eps) / (denom + eps)
-    return 1 - dice.mean()
+
+def _weighted_defect_loss(logit, T, W, pos_weight: float):
+    """單通道 sigmoid defect 頭:加權 BCE + 加權 soft-Dice。
+
+    logit: (N,1,H,W) 或 (N,H,W);T/W: (N,H,W) float。回傳 (loss, bce, dice)。
+    """
+    if logit.dim() == 4:
+        logit = logit.squeeze(1)
+    pw = torch.tensor(float(pos_weight), device=logit.device)
+    bce_map = F.binary_cross_entropy_with_logits(logit, T, reduction="none", pos_weight=pw)
+    wbce = (W * bce_map).sum() / (W.sum() + _EPS)
+
+    p = torch.sigmoid(logit)
+    num = 2.0 * (W * p * T).sum()
+    den = (W * p).sum() + (W * T).sum()
+    dice = 1.0 - (num + _EPS) / (den + _EPS)
+    return wbce + dice, wbce, dice
 
 
 def multihead_loss(
     outputs: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
     head_weights: dict[str, float] | None = None,
+    pos_weight: float = 8.0,
     heads: tuple[schema.Head, ...] = schema.HEADS,
 ):
-    """加權多頭 loss。
+    """S5 雙頭加權 loss。
 
-    outputs / targets：{head_key -> tensor}(與 model.forward / encode_targets 對齊)。
-    head_weights：{head_key -> float},預設全 1.0(= S4 ALPHA_B=ALPHA_C=1.0)。
+    outputs: {"A": part_logits (N,2,H,W), "B": defect_logit (N,1,H,W)}。
+    targets: encode_targets 的輸出(用到 "A","B_T","B_W")。
+    head_weights: {head_key -> float},預設全 1.0(B 即 λ)。
     回傳 (total_loss, components dict[str,float])。
     """
     if head_weights is None:
         head_weights = {h.key: 1.0 for h in heads}
 
-    # is_part:零件像素遮罩,給 instance head 的 Dice 用。取主 head 的 target==1。
-    main_key = schema.main_heads(heads)[0].key
-    is_part = targets[main_key] == 1
-
-    total = 0.0
     comps: dict[str, float] = {}
+    total = 0.0
     for h in heads:
-        logits = outputs[h.key]
-        target = targets[h.key]
-        ignore = h.ignore_index if h.ignore_index is not None else -100
-        head_loss = 0.0
-        if schema.Loss.CE in h.losses:
-            ce = F.cross_entropy(logits, target, ignore_index=ignore)
+        if h.name == "part":
+            ce = F.cross_entropy(outputs[h.key], targets["A"])
             comps[f"L_{h.key}_ce"] = float(ce.item())
-            head_loss = head_loss + ce
-        if schema.Loss.DICE in h.losses:
-            dice = multiclass_dice_loss(logits, target, is_part, h.num_classes)
+            total = total + head_weights.get(h.key, 1.0) * ce
+        elif h.name == "defect":
+            loss, bce, dice = _weighted_defect_loss(
+                outputs[h.key], targets["B_T"], targets["B_W"], pos_weight)
+            comps[f"L_{h.key}_bce"] = float(bce.item())
             comps[f"L_{h.key}_dice"] = float(dice.item())
-            head_loss = head_loss + dice
-        total = total + head_weights.get(h.key, 1.0) * head_loss
+            total = total + head_weights.get(h.key, 1.0) * loss
+        else:
+            raise ValueError(f"未知的 head 名稱:{h.name!r}(S5 只支援 part / defect)")
 
     comps["L_total"] = float(total.item())
     return total, comps

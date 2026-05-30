@@ -44,8 +44,9 @@ class Level(str, Enum):
 
 class Loss(str, Enum):
     """目前用到的 loss。語意上皆為 *逐像素套用*(pixel-applied)。"""
-    CE = "ce"      # cross entropy(逐像素)
+    CE = "ce"      # cross entropy(逐像素,multiclass softmax head)
     DICE = "dice"  # soft dice(逐像素)
+    BCE = "bce"    # 加權 binary cross-entropy(單通道 sigmoid head,S5 defect 用)
 
 
 #: 哪些 loss 屬於「逐像素監督」——guardrail 用這組判斷 instance/pixel mismatch。
@@ -56,6 +57,9 @@ PIXEL_APPLIED_LOSSES: frozenset[Loss] = frozenset({Loss.CE, Loss.DICE})
 # ── class 表(label index 的單一來源)─────────────────────────
 # index = tuple 內位置;下游一律用這裡,別在各 script 重新硬寫 dict。
 PART_CLASSES: tuple[str, ...] = ("bg", "part")
+
+#: S5 defect 頭:單通道 sigmoid 瑕疵定位熱圖(非 class softmax)。
+DEFECT_CLASSES: tuple[str, ...] = ("defect",)
 
 STATE_CLASSES: tuple[str, ...] = (
     "normal",
@@ -108,7 +112,10 @@ class Head:
         return len(self.classes)
 
 
-# 如實編碼 Stage 4 程式碼的三頭(scripts/train_stage4.py)。
+# S5 雙頭(回 S3 乾淨基準):part(2 類 softmax)+ defect(1 通道 sigmoid 熱圖)。
+# 相對 S4 三頭:拿掉 state(B,7 類)/ type(C,4 類)—— aux、矛盾梯度來源、
+# 且非當前目標。backbone 不動,只換 d1 之後的頭。state/type 的 class 表仍保留
+# (上方),供 eval 的 per-state 分項分析用(從 meta 重建,不再是訓練頭)。
 HEADS: tuple[Head, ...] = (
     Head(
         key="A", name="part",
@@ -120,22 +127,13 @@ HEADS: tuple[Head, ...] = (
         ignore_index=None,
     ),
     Head(
-        key="B", name="state",
-        classes=STATE_CLASSES,
-        level=Level.INSTANCE,  # meta.instances[].defect_state,每實例一個
-        source="instance_mask + meta.instances[].defect_state(廣播到實例像素)",
-        losses=(Loss.CE, Loss.DICE),
-        role="aux",            # S4 多頭路線,已否決進 ablation
-        ignore_index=IGNORE_INDEX,
-    ),
-    Head(
-        key="C", name="type",
-        classes=TYPE_CLASSES,
-        level=Level.INSTANCE,
-        source="由 state 前綴推導(state_to_type),同樣廣播到實例像素",
-        losses=(Loss.CE, Loss.DICE),
-        role="aux",
-        ignore_index=IGNORE_INDEX,
+        key="B", name="defect",
+        classes=DEFECT_CLASSES,
+        level=Level.PIXEL,  # 變形區為真·dense 像素監督(非 instance 廣播)
+        source="變形區(normal vs defect 同pose相減)→ T(膨脹容忍帶) + 高斯權重 W",
+        losses=(Loss.BCE, Loss.DICE),  # 加權 BCE + 加權 soft-Dice(見 losses.py)
+        role="main",
+        ignore_index=None,  # ignore 由 weight map W≈0 自然達成,非 index
     ),
 )
 
