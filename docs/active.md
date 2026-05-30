@@ -25,11 +25,29 @@
 - ⚠️ **好件誤報率(normal FP)= 22-25%**:模型過度判正 → bend 帳面被底噪灌水。
   根因 = loss 平衡(pos_weight=8 太推正 / w_norm 太弱),**多 step 修不掉**,要調旋鈕。
 
+### base_c 飽和下邊界(下掃完成)
+| base_c | 2 | 4 | 6 | 8 | 16-32 |
+| --- | --- | --- | --- | --- | --- |
+| params | 13K | 52K | 117K | 208K | 0.8-3.3M |
+| defect IoU | 0.000崩 | 0.177 | 0.283 | 0.296 | ~0.29 |
+→ 拐點 base_c≈6(bc6 達 bc8 的 96% @ 56% params);bc4 不足、bc2 崩。最小可用寬度 ≈6-8。
+
+### ⭐ FP 突破:defect_thr 後處理(免重訓,scripts/sweep_defect_thr.py)
+bc8 上掃推論閾值:**thr 0.5→0.7 → defect IoU 0.296→0.365(≈/勝 S3 0.362)、normal FP 22%→7%**。
+→ TrainConfig.defect_thr 預設改 **0.7**(commit `bd38678`)。
+- **誠實面**:thr=0.7(matched-FP 7%)下 **bend 偵測僅 9% vs FP floor 7% → bend 訊號仍 marginal**。
+  之前 thr=0.5 的「bend 27%」是 FP 灌水。interior-ignore 讓 bend 能「表示」變形(inst IoU 0.006→0.115、5×、
+  不再崩 0),但 controlled-FP 下 bend 仍弱 = 本質視覺訊號低(呼應 S3)。displace(40%)+remesh(86%)扛主力。
+
+### 模型已可調深度(commit `4a51447`)
+segnet enc/dec → ModuleList + `depth` 參數;depth=4 與原架構參數完全一致;舊 ckpt 經 flexible loader 仍可載。
+
 ### 下一步(用戶定序 2026-05-31)
-1. 🔄 **再往下縮 base_c {2,4,6}** 找飽和下邊界(bc2=13K params)。`output/s5_downsweep.log`。
-2. ⬜ **壓 FP**:pos_weight↓(8→3/5)、defect_thr↑(0.5→0.6/0.7,推論端免重訓可先掃)、w_norm↑(0.3→0.5/0.8)。
-3. ⬜ **長版**(選定 size+旋鈕後,如 8000-10000 步)最後跑。
-- ⬜ 報告:S3 的 A 圖(資料特性,與模型無關)未進 report;`.ipynb` 繳交橋(6/2)。
+1. ✅ base_c 上/下掃完(飽和 + 下邊界)。
+2. 🔄 **深度探針 {d3,d2} + pos_weight {3,5} 掃描**(base_c=8)`output/s5_arch_fp.log`。
+3. ⬜ 統一重生所有 report(thr=0.7);彙整深度/pos_weight 結果。
+4. ⬜ **長版 15000 步(5×)** 看過擬合拐點,最後跑(選定 size+旋鈕後)。
+- ⬜ w_norm 旋鈕尚未 plumb(需 encode_targets 參數化);S3 的 A 圖未進 report;`.ipynb` 繳交橋(6/2)。
 
 ### 已結案(歸檔 `docs/history/refactor_and_s4_review.md`)
 - **程式大重構**(src/ 分層 + runtime 生成 + cli + output 角色分類)。
