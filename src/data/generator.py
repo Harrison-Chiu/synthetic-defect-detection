@@ -262,12 +262,36 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
         part_crop = rgba[by0:by1, bx0:bx1]
         dmask_crop = dmask_t[by0:by1, bx0:bx1] if dmask_t is not None else None
 
-        cx, cy = rng.randint(0, S), rng.randint(0, S)
-        px, py = cx - part_w // 2, cy - part_h // 2
-        x_a, y_a = max(0, px), max(0, py)
-        x_b, y_b = min(S, px + part_w), min(S, py + part_h)
-        if x_a >= x_b or y_a >= y_b:
-            continue
+        # S6: 碰撞檢查 — 嘗試幾次隨機位置,找到與已擺零件不重疊的位置
+        sep = getattr(cfg, "min_separation_px", 0)
+        placed_ok = False
+        for _attempt in range(20 if sep > 0 else 1):
+            cx, cy = rng.randint(0, S), rng.randint(0, S)
+            px, py = cx - part_w // 2, cy - part_h // 2
+            x_a, y_a = max(0, px), max(0, py)
+            x_b, y_b = min(S, px + part_w), min(S, py + part_h)
+            if x_a >= x_b or y_a >= y_b:
+                continue
+            if sep > 0 and placed_meta:
+                overlap = False
+                for pm in placed_meta:
+                    pb = pm["bbox"]
+                    if (x_a < pb[2] + sep and x_b > pb[0] - sep and
+                            y_a < pb[3] + sep and y_b > pb[1] - sep):
+                        overlap = True
+                        break
+                if overlap:
+                    continue
+            placed_ok = True
+            break
+        if not placed_ok:
+            # 退化: 放棄碰撞檢查,用最後一次的位置
+            cx, cy = rng.randint(0, S), rng.randint(0, S)
+            px, py = cx - part_w // 2, cy - part_h // 2
+            x_a, y_a = max(0, px), max(0, py)
+            x_b, y_b = min(S, px + part_w), min(S, py + part_h)
+            if x_a >= x_b or y_a >= y_b:
+                continue
 
         cx0, cy0 = x_a - px, y_a - py
         cx1, cy1 = cx0 + (x_b - x_a), cy0 + (y_b - y_a)

@@ -28,10 +28,11 @@ CLS_NORMAL = 1
 CLS_DEFECT = 2
 
 #: 屬於「瑕疵」的 defect_state(其餘視為 normal)。與 schema.STATE_CLASSES 對齊。
+#: S6 簡化為 3 種: bend_45 / displace_light / remesh_light
 DEFECT_STATES_DEFECTIVE = frozenset({
-    "bend_light", "bend_heavy",
-    "displace_light", "displace_heavy",
-    "remesh_light", "remesh_heavy",
+    "bend_45",
+    "displace_light",
+    "remesh_light",
 })
 
 # ── index 區段保留 ──────────────────────────────────────────
@@ -45,7 +46,7 @@ TEST_INDEX_OFFSET = 30_000_000     # 獨立 test set 用(報數字;與 val 互�
 # ── S5 defect 頭 target 編碼參數(label 幾何,非生成;見 stage5_plan.md §3)──
 # 變形區二值 mask(離線 gen_defectmask.py,thr=30)→ 場景空間後,在此組 T / W。
 DEFECT_DILATE_PX = 4      # D⁺ = 變形區膨脹(容忍帶:亮在附近也算對)
-DEFECT_GAUSS_SIGMA = 6.0  # 高斯權重 W 的 σ(向外淡出;太大會糊進內部讓 ignore 失效)
+DEFECT_GAUSS_SIGMA = 14.0 # S6: 加寬高斯(6→14),讓過渡帶延伸更遠,壞件邊緣有更多梯度訊號
 DEFECT_W_NORM = 0.3       # 好件(normal part)像素的權重(逼模型學「好件→不該亮」)
 DEFECT_W_BG = 0.0         # 遠背景權重(0 = 完全不在意;壞件內部亦由高斯自然衰減到≈0)
 
@@ -59,10 +60,11 @@ class GenConfig:
     out_size: int = 256
 
     # ── 零件擺放 ──
-    parts_range: tuple[int, int] = (3, 7)      # 每場景零件數(含端點)
-    scale_range: tuple[float, float] = (0.5, 1.0)
+    parts_range: tuple[int, int] = (2, 4)      # S6: 2~4 顆(S5 was 3~7,太擠)
+    scale_range: tuple[float, float] = (0.65, 0.85)  # S6: 同場景大小更一致
     rot_range: tuple[float, float] = (0.0, 360.0)
     defect_prob: float = 0.20                  # 每 instance 為瑕疵的機率
+    min_separation_px: int = 8                 # S6: bbox 最小間距(碰撞檢查)
 
     # ── 背景 base layer(互斥,per scene)──
     base_layer_probs: dict[str, float] = field(default_factory=lambda: {

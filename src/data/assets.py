@@ -18,6 +18,9 @@ from pathlib import Path
 
 from src.data.config import DEFECT_STATES_DEFECTIVE
 
+# S6: 只載入這些 state 目錄(舊的 bend_light/heavy 等不再使用)
+_ALLOWED_STATE_DIRS = {"normal"} | DEFECT_STATES_DEFECTIVE
+
 # repo root = 本檔的 .../src/data/assets.py 往上三層
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +29,11 @@ DEFAULT_BG_REAL_DIR = REPO_ROOT / "assets" / "backgrounds_real"
 DEFAULT_BG_PROC_DIR = REPO_ROOT / "assets" / "backgrounds_procedural"
 
 _HDRI_RE = re.compile(r"_h(\d+)_")
+_EL_RE = re.compile(r"_el([+-]\d+)_")
 _IMG_EXTS = ("*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG")
+
+# S6: 只保留 ±30° 以內的俯仰角(刪掉 ±60° 太立的 patch)
+_ALLOWED_ELEVATIONS = {-30, -10, 10, 30}
 
 
 def _hdri_idx_from_filename(path: str) -> int:
@@ -59,10 +66,17 @@ def load_part_index_by_hdri(parts_dir: str | os.PathLike = DEFAULT_PARTS_DIR):
         full = os.path.join(parts_dir, state_dir)
         if not os.path.isdir(full):
             continue
+        # S6: 只載入允許的 state 目錄,舊的 bend_light/heavy 等完全跳過
+        if state_dir not in _ALLOWED_STATE_DIRS:
+            continue
         key = "defect" if state_dir in DEFECT_STATES_DEFECTIVE else "normal"
         for png in sorted(glob.glob(os.path.join(full, "*.png"))):
             if png.endswith("_defectmask.png"):
                 continue  # S5 離線產的變形區遮罩,不是零件 patch
+            # S6: 過濾俯仰角,只保留 ±30° 內
+            el_m = _EL_RE.search(os.path.basename(png))
+            if el_m and int(el_m.group(1)) not in _ALLOWED_ELEVATIONS:
+                continue
             h = _hdri_idx_from_filename(png)
             buckets.setdefault(h, {"normal": [], "defect": []})
             buckets[h][key].append((png, state_dir))

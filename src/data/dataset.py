@@ -88,7 +88,9 @@ def encode_targets(
     else:
         D = defect_region.astype(bool)
     D_plus = _dilate(D, DEFECT_DILATE_PX)
-    T = D_plus.astype(np.float32)
+    # S6: T = 壞件 silhouette ∪ D+(bend 差異在邊緣,D+ 可能延伸到 silhouette 外)
+    defect_sil = (semantic == CLS_DEFECT)
+    T = (defect_sil | D_plus).astype(np.float32)
     w_gauss = _gaussian(D_plus.astype(np.float32), DEFECT_GAUSS_SIGMA)
     if w_gauss.max() > 0:
         w_gauss = w_gauss / w_gauss.max()  # 正規化到 [0,1],變形區中心≈1

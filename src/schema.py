@@ -63,9 +63,9 @@ DEFECT_CLASSES: tuple[str, ...] = ("defect",)
 
 STATE_CLASSES: tuple[str, ...] = (
     "normal",
-    "bend_light", "bend_heavy",
-    "displace_light", "displace_heavy",
-    "remesh_light", "remesh_heavy",
+    "bend_45",
+    "displace_light",
+    "remesh_light",
 )
 
 TYPE_CLASSES: tuple[str, ...] = ("normal", "bend", "displace", "remesh")
