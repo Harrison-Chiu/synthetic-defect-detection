@@ -24,7 +24,7 @@ _ALLOWED_STATE_DIRS = {"normal"} | DEFECT_STATES_DEFECTIVE
 # repo root = 本檔的 .../src/data/assets.py 往上三層
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_PARTS_DIR = REPO_ROOT / "output" / "patches"
+DEFAULT_PARTS_DIR = REPO_ROOT / "output" / "patches_s6"  # S6 新渲路徑
 DEFAULT_BG_REAL_DIR = REPO_ROOT / "assets" / "backgrounds_real"
 DEFAULT_BG_PROC_DIR = REPO_ROOT / "assets" / "backgrounds_procedural"
 
@@ -32,8 +32,8 @@ _HDRI_RE = re.compile(r"_h(\d+)_")
 _EL_RE = re.compile(r"_el([+-]\d+)_")
 _IMG_EXTS = ("*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG")
 
-# S6: 只保留 ±30° 以內的俯仰角(刪掉 ±60° 太立的 patch)
-_ALLOWED_ELEVATIONS = {-30, -10, 10, 30}
+# S6: 新渲的 elevations（-30,-20,0,20,30），全部載入不需過濾
+_ALLOWED_ELEVATIONS = {-30, -20, 0, 20, 30}
 
 
 def _hdri_idx_from_filename(path: str) -> int:
@@ -86,11 +86,27 @@ def load_part_index_by_hdri(parts_dir: str | os.PathLike = DEFAULT_PARTS_DIR):
 
 
 def defectmask_path_for(part_path: str) -> str:
-    """由 defect patch 路徑推出對應的變形區遮罩路徑(gen_defectmask.py 產)。
+    """由 defect patch 路徑推出對應的變形區遮罩路徑。
 
-    `.../<state>/<pose>_<state>.png` → `.../<state>/<pose>_<state>_defectmask.png`
-    normal patch 無變形區,呼叫端自行判斷(is_defective)後才查。
+    S6: defectmask 只跟 (az, el, state) 有關，跟光照無關。
+    patch 檔名: pan_head_az000_el+00_h0_r000_s10_bend_45.png
+    mask 檔名:  pan_head_az000_el+00_bend_45_defectmask.png（pose-only）
+
+    從 patch 路徑解析 az, el, state，組出 mask 路徑。
     """
+    import re
+    basename = os.path.basename(part_path)
+    dirname = os.path.dirname(part_path)
+    state = os.path.basename(dirname)  # 目錄名即 state
+    # 解析 az, el
+    az_m = re.search(r"(az\d+)", basename)
+    el_m = re.search(r"(el[+-]\d+)", basename)
+    if az_m and el_m:
+        # S6 pose-only defectmask
+        part_prefix = basename.split("_az")[0]  # "pan_head"
+        mask_name = f"{part_prefix}_{az_m.group(1)}_{el_m.group(1)}_{state}_defectmask.png"
+        return os.path.join(dirname, mask_name)
+    # fallback: 舊格式
     return part_path[:-4] + "_defectmask.png"
 
 

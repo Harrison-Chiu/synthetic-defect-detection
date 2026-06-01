@@ -47,12 +47,24 @@ def set_camera(az_deg, el_deg, cfg: RenderConfig = DEFAULT_RENDER_CONFIG):
     cam.data.lens = cfg.camera_fl_mm
 
 
-def set_hdri(hdri_filename, cfg: RenderConfig = DEFAULT_RENDER_CONFIG):
-    env_node = bpy.context.scene.world.node_tree.nodes.get("HDRI_node")
+def set_hdri(hdri_filename, cfg: RenderConfig = DEFAULT_RENDER_CONFIG,
+             rotation_deg: int = 0, strength: float = 1.0):
+    """載入 HDRI 並設定旋轉(Z 軸)和強度。"""
+    world = bpy.context.scene.world
+    nodes = world.node_tree.nodes
+    env_node = nodes.get("HDRI_node")
     if env_node is None:
         raise RuntimeError("找不到 HDRI_node,先在 Blender 場景接好 World HDRI 節點")
     img = bpy.data.images.load(str(cfg.hdri_dir / hdri_filename), check_existing=True)
     env_node.image = img
+    # S6: HDRI rotation
+    mapping = nodes.get("Mapping")
+    if mapping:
+        mapping.inputs["Rotation"].default_value[2] = math.radians(rotation_deg)
+    # S6: HDRI strength
+    bg_node = nodes.get("BG_node")
+    if bg_node:
+        bg_node.inputs["Strength"].default_value = strength
 
 
 def show_only(part_name, pose_euler_deg=(0, 0, 0)):

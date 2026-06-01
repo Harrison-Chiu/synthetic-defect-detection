@@ -28,11 +28,11 @@ CLS_NORMAL = 1
 CLS_DEFECT = 2
 
 #: 屬於「瑕疵」的 defect_state(其餘視為 normal)。與 schema.STATE_CLASSES 對齊。
-#: S6 簡化為 3 種: bend_45 / displace_light / remesh_light
+#: S6 簡化為 3 種（目錄名與 render config DEFECT_STATES 對齊）
 DEFECT_STATES_DEFECTIVE = frozenset({
     "bend_45",
-    "displace_light",
-    "remesh_light",
+    "displace",
+    "remesh",
 })
 
 # ── index 區段保留 ──────────────────────────────────────────
