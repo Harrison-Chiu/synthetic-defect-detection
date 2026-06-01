@@ -172,14 +172,13 @@ def _draw_distractors(canvas, cfg, rng):
     return n, shape_log
 
 
-def _transform_part(rgba, cfg, rng):
-    rot = rng.uniform(*cfg.rot_range)
-    scale = rng.uniform(*cfg.scale_range)
+def _transform_part(rgba, rot: float, scale: float):
+    """套用 rot + scale,回傳變換後 RGBA array。"""
     img = Image.fromarray(rgba, mode="RGBA")
     img = img.rotate(rot, resample=Image.BILINEAR, expand=True)
     nw, nh = img.size
     img = img.resize((max(1, int(nw * scale)), max(1, int(nh * scale))), Image.BILINEAR)
-    return np.array(img), scale, rot
+    return np.array(img)
 
 
 def _apply_rot_scale_mask(mask: np.ndarray, rot: float, scale: float) -> np.ndarray:
@@ -228,27 +227,35 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
     semantic = np.zeros((S, S), dtype=np.uint8)
     instance = np.zeros((S, S), dtype=np.uint8)
     defect_region = np.zeros((S, S), dtype=np.uint8)  # S5:壞件變形區(場景空間)
+    depth_map = np.zeros((S, S), dtype=np.uint8)       # S6:逐像素零件層數(防三層堆疊)
 
     # 3) 抽零件並逐一貼上
     n_parts = rng.randint(cfg.parts_range[0], cfg.parts_range[1] + 1)
     chosen = _sample_parts(n_parts, normal_pool, defect_pool, cfg.defect_prob, rng)
 
+    # S6: per-scene base scale + per-part jitter
+    base_scale = rng.uniform(*cfg.scale_base_range)
+    jitter = cfg.scale_jitter
+
     placed_meta = []
-    for inst_id, (part_path, defect_state) in enumerate(chosen, start=1):
+    inst_id = 0
+    for (part_path, defect_state) in chosen:
+        inst_id += 1
         rgba = np.array(Image.open(part_path).convert("RGBA"))
         is_defective = defect_state in DEFECT_STATES_DEFECTIVE
 
         # S5:壞件載入對應變形區遮罩,套與零件相同的 rot+scale(同原點,已配準)
-        dmask_t = None
+        dmask_raw = None
         if is_defective:
             from src.data.assets import defectmask_path_for
             dpath = defectmask_path_for(part_path)
             if os.path.exists(dpath):
                 dmask_raw = np.array(Image.open(dpath).convert("L"))
-            else:
-                dmask_raw = None  # 缺遮罩 → 該壞件變形區留空(退化成全 ignore)
 
-        rgba, scale, rot = _transform_part(rgba, cfg, rng)
+        rot = rng.uniform(*cfg.rot_range)
+        scale = base_scale * rng.uniform(1 - jitter, 1 + jitter)
+        rgba = _transform_part(rgba, rot, scale)
+        dmask_t = None
         if is_defective and dmask_raw is not None:
             dmask_t = _apply_rot_scale_mask(dmask_raw, rot, scale)
 
@@ -262,36 +269,34 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
         part_crop = rgba[by0:by1, bx0:bx1]
         dmask_crop = dmask_t[by0:by1, bx0:bx1] if dmask_t is not None else None
 
-        # S6: 碰撞檢查 — 嘗試幾次隨機位置,找到與已擺零件不重疊的位置
-        sep = getattr(cfg, "min_separation_px", 0)
+        # S6: 碰撞檢查(防三層堆疊)+ 邊緣 margin
+        max_attempts = cfg.collision_attempts
+        # 限制中心範圍,讓零件不被邊緣切到
+        margin_x = part_w // 2
+        margin_y = part_h // 2
+        cx_lo, cx_hi = margin_x, max(margin_x + 1, S - margin_x)
+        cy_lo, cy_hi = margin_y, max(margin_y + 1, S - margin_y)
         placed_ok = False
-        for _attempt in range(20 if sep > 0 else 1):
-            cx, cy = rng.randint(0, S), rng.randint(0, S)
+        for _attempt in range(max_attempts):
+            cx = rng.randint(cx_lo, cx_hi)
+            cy = rng.randint(cy_lo, cy_hi)
             px, py = cx - part_w // 2, cy - part_h // 2
             x_a, y_a = max(0, px), max(0, py)
             x_b, y_b = min(S, px + part_w), min(S, py + part_h)
             if x_a >= x_b or y_a >= y_b:
                 continue
-            if sep > 0 and placed_meta:
-                overlap = False
-                for pm in placed_meta:
-                    pb = pm["bbox"]
-                    if (x_a < pb[2] + sep and x_b > pb[0] - sep and
-                            y_a < pb[3] + sep and y_b > pb[1] - sep):
-                        overlap = True
-                        break
-                if overlap:
-                    continue
+            # 檢查：新零件的不透明像素 + 現有 depth_map 是否會 ≥ 3
+            cx0, cy0 = x_a - px, y_a - py
+            cx1, cy1 = cx0 + (x_b - x_a), cy0 + (y_b - y_a)
+            new_alpha = part_crop[cy0:cy1, cx0:cx1, 3] > 127  # 新零件的不透明區域
+            existing_depth = depth_map[y_a:y_b, x_a:x_b]
+            if (existing_depth[new_alpha] >= 2).any():
+                continue  # 會造成三層堆疊 → 換位置
             placed_ok = True
             break
         if not placed_ok:
-            # 退化: 放棄碰撞檢查,用最後一次的位置
-            cx, cy = rng.randint(0, S), rng.randint(0, S)
-            px, py = cx - part_w // 2, cy - part_h // 2
-            x_a, y_a = max(0, px), max(0, py)
-            x_b, y_b = min(S, px + part_w), min(S, py + part_h)
-            if x_a >= x_b or y_a >= y_b:
-                continue
+            # S6: 找不到不會三層堆疊的位置 → 跳過此零件
+            continue
 
         cx0, cy0 = x_a - px, y_a - py
         cx1, cy1 = cx0 + (x_b - x_a), cy0 + (y_b - y_a)
@@ -307,6 +312,7 @@ def generate_scene(i: int, assets: Assets, config: GenConfig = DEFAULT_CONFIG) -
         cls_val = CLS_DEFECT if is_defective else CLS_NORMAL
         semantic[y_a:y_b, x_a:x_b][is_part] = cls_val
         instance[y_a:y_b, x_a:x_b][is_part] = inst_id
+        depth_map[y_a:y_b, x_a:x_b][is_part] += 1  # S6:更新深度計數
         if dmask_crop is not None:
             sub_dmask = dmask_crop[cy0:cy1, cx0:cx1]  # 對齊 sub_rgba 的子裁切
             hit = (sub_dmask > 127) & is_part         # 變形區 ∩ 零件像素
