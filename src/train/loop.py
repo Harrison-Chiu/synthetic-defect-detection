@@ -76,6 +76,7 @@ def train_loop(
                                 "val_mIoU": [], "val_IoU_bg": [], "val_IoU_normal": [],
                                 "val_IoU_defect": [], "lr": [], "samples_per_s": []}
     best_miou = -1.0
+    best_defect_iou = -1.0
     best_state = None
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -121,8 +122,12 @@ def train_loop(
             history["lr"].append(cur_lr)
             history["samples_per_s"].append(sps)
 
-            if val["mIoU"] > best_miou:
-                best_miou = val["mIoU"]
+            # S6: best checkpoint 以 val defect IoU 選(class 2),
+            # 因為 bg/normal IoU 永遠高,稀釋 mIoU 對瑕疵改善的敏感度
+            cur_defect_iou = val["IoU_per_class"][2]
+            if cur_defect_iou > best_defect_iou:
+                best_defect_iou = cur_defect_iou
+                best_miou = val["mIoU"]  # 同步記錄供 log
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
             iou = val["IoU_per_class"]
@@ -131,7 +136,7 @@ def train_loop(
                            f"L={avg_loss:.3f} vL={val['loss']['L_total']:.3f} "
                            f"mIoU={val['mIoU']:.3f} bg={iou[0]:.3f} norm={iou[1]:.3f} "
                            f"def={iou[2]:.3f} | {sps:.1f} smp/s gpu={gpu_mb:.0f}MB")
-            scheduler.step(val["mIoU"])
+            scheduler.step(cur_defect_iou)
             model.train()
             t_window = time.time()
 
@@ -141,7 +146,7 @@ def train_loop(
             t_window = time.time()
 
     total_dt = time.time() - t_start
-    _log(log_path, f"done in {total_dt/60:.1f} min. best val mIoU={best_miou:.3f}")
+    _log(log_path, f"done in {total_dt/60:.1f} min. best val defectIoU={best_defect_iou:.3f} mIoU={best_miou:.3f}")
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -161,6 +166,7 @@ def train_loop(
     torch.save({
         "state_dict": model.state_dict(),
         "best_val_miou": best_miou,
+        "best_val_defect_iou": best_defect_iou,
         "test_metrics": test_metrics,
         "test_split": split_name,
         "per_state": per_state,

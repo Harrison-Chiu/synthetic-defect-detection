@@ -62,7 +62,7 @@ class GenConfig:
     # ── 零件擺放 ──
     parts_range: tuple[int, int] = (3, 6)      # S6: 3~6 顆
     scale_base_range: tuple[float, float] = (0.50, 0.75)  # S6: per-scene base scale (50~75%)
-    scale_jitter: float = 0.15                 # S6: 各零件 ± jitter (base × [1-j, 1+j])
+    scale_jitter: float = 0.10                 # S6: 各零件 ± jitter (base × [1-j, 1+j])
     rot_range: tuple[float, float] = (0.0, 360.0)
     defect_prob: float = 0.20                  # 每 instance 為瑕疵的機率
     collision_attempts: int = 50               # S6: 防三層堆疊的隨機嘗試次數

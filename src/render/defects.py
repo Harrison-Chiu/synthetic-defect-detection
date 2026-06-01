@@ -58,13 +58,18 @@ def apply_defect(obj, defect_state, az_deg, rng, cfg: RenderConfig = DEFAULT_REN
                 "axis_jitter_deg": round(jit_deg, 3), "obj_z_rot_deg": round(alpha_deg, 3)}
 
     if defect_state.startswith("displace"):
+        # Subdivision 先加密網格，讓 displace 有更多頂點可位移
+        sub = obj.modifiers.new("DefectSubdiv", "SUBSURF")
+        sub.levels = cfg.displace_subdiv_levels
+        sub.render_levels = cfg.displace_subdiv_levels
         tex = get_or_create_clouds_texture(noise_scale=cfg.displace_noise_scale)
         m = obj.modifiers.new("DefectDisplace", "DISPLACE")
         m.texture = tex
         m.strength = cfg.displace_strength
         m.mid_level = 0.5
         m.direction = "NORMAL"
-        return {"strength": cfg.displace_strength, "noise_scale": cfg.displace_noise_scale}
+        return {"strength": cfg.displace_strength, "noise_scale": cfg.displace_noise_scale,
+                "subdiv_levels": cfg.displace_subdiv_levels}
 
     if defect_state.startswith("remesh"):
         m = obj.modifiers.new("DefectRemesh", "REMESH")

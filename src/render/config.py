@@ -68,10 +68,11 @@ class RenderConfig:
     # S6 defect 參數（固定值，不再用 range random）
     bend_angle_deg: float = 45.0
     bend_axis_jitter_deg_range: tuple[float, float] = (-30, 30)  # 彎曲軸向仍保留 jitter
-    displace_strength: float = 0.4
-    displace_noise_scale: float = 0.7
+    displace_strength: float = 0.6
+    displace_noise_scale: float = 0.25
+    displace_subdiv_levels: int = 1    # Subdivision 加密網格後再 displace
     remesh_mode: str = "SMOOTH"   # S6: SHARP → SMOOTH
-    remesh_octree_depth: int = 7  # S6: d5 → d7
+    remesh_octree_depth: int = 6  # S6: d7 → d6
     remesh_scale: float = 0.99
 
     # 舊版 defect 參數（保留供參照）
