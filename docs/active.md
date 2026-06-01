@@ -17,11 +17,19 @@ interior-ignore 監督（壞件內部 W≈0）+ 回 S3 雙頭 → **defect IoU 0
 模型嚴重過參數化（bc8 即飽和）；合成資料**無過擬合**；
 bend 不再崩 0 但本質仍弱（delta ≈ 1–6%，接近 FP floor）。
 
+### S6 一句話成果
+Subdiv+Displace s=0.6 / Remesh d6 / Jitter ±10% + best ckpt 改 defect IoU →
+**test defect IoU 0.443（+22% over S3, +14% over S5）**；test mIoU 0.732, pixel acc 95.02%。
+
 ### S6 待辦（優先序）
-1. ⬜ **圖表集討論** → 收斂後修改 script → 一次生成（`stage5_figure_plan.md`）
-2. ⬜ **per-type eval 加進 training loop** → 指定步數驗證跑
-3. ⏸ **`.ipynb` 繳交橋**（課程要求，6/2）— 待 Harrison 決定範圍
-4. ⬜ **最終報告敘事**
+1. ✅ **渲染 2880 patches**（final params）
+2. ✅ **Defectmask 生成 + 驗證**（bend 40%, displace 16.5%, remesh 27%）
+3. ✅ **訓練 4000 steps**（`output/runs/s6_final/`）
+4. ✅ **圖表集**（5 張 training figures + HTML report）
+5. ✅ **`.ipynb` 繳交橋**（`submission.ipynb`）
+6. ✅ **簡報素材**（`docs/presentation_materials.md`）
+7. ⬜ **組員簡報製作** — Harrison + 同學自行處理
+8. ⬜ **打包 .zip 繳交**
 
 ### 結構性缺口（跨 stage）
 - 只有 `pan_head` 有 defect patch（72 pose）；socket/hex_nut/flange 無
